@@ -250,6 +250,17 @@ select:focus {
   font-size: 16px;
 }
 
+.settings-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-title p {
+  font-size: 12px;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -486,6 +497,21 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.manual-start-button {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 0 0 3px rgba(179, 38, 58, 0.16);
+  white-space: nowrap;
+}
+
+.manual-start-button:hover {
+  border-color: #8e1e2e;
+  background: #8e1e2e;
+  color: #fff;
 }
 
 .manual-score-chip {

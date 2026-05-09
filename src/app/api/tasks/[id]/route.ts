@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
-  prompt: z.string().min(1).optional(),
+  prompt: z.string().optional(),
   urls: z.array(z.string().url()).min(1).optional(),
   mode: z.enum(["auto", "manual"]).optional(),
   rubrics: z

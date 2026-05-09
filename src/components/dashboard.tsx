@@ -209,11 +209,15 @@ export function Dashboard() {
 
   async function createTask() {
     const id = taskId.trim();
+    const promptText = prompt.trim();
     let urls: string[];
     let rubrics: Rubric[];
     try {
       urls = parseUrls(urlsText);
       rubrics = parseRubricsInput(rubricsText);
+      if (!promptText && !rubrics.length) {
+        throw new Error("需要自动生成 Rubrics 时请填写 Prompt；手填 Rubrics 时可以不填。");
+      }
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
       return;
@@ -223,7 +227,7 @@ export function Dashboard() {
       const response = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: id || undefined, prompt, urls, rubrics, mode: manualMode ? "manual" : "auto" }),
+        body: JSON.stringify({ id: id || undefined, prompt: promptText, urls, rubrics, mode: manualMode ? "manual" : "auto" }),
       });
       if (!response.ok) throw new Error(await response.text());
       const task = (await response.json()) as Task;
@@ -311,7 +315,12 @@ export function Dashboard() {
           </label>
           <label>
             Prompt
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={8} />
+            <textarea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              rows={8}
+              placeholder="可以不填；需要生成 Rubrics 时必填。"
+            />
           </label>
           <label>
             产物 URL 数组
@@ -323,7 +332,7 @@ export function Dashboard() {
               value={rubricsText}
               onChange={(event) => setRubricsText(event.target.value)}
               rows={8}
-              placeholder={"留空则自动生成；也可粘贴编号列表或 JSON rubrics。"}
+              placeholder={"留空则自动生成；手填时一行一条规则。"}
             />
           </label>
         </section>
@@ -442,7 +451,10 @@ export function Dashboard() {
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
           <section className="settings-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <div className="panel-header">
-              <h2>模型配置</h2>
+              <div className="settings-title">
+                <h2>模型配置</h2>
+                <p>不需要生成 Rubrics 时不用配模型。</p>
+              </div>
               <div className="actions">
                 <button onClick={() => setSettingsOpen(false)}>关闭</button>
                 <button onClick={testSettings} disabled={Boolean(busy)}>
@@ -616,12 +628,12 @@ function ResultView({
                   </a>
                   <span className="manual-score-chip">{`${progress}/${task.rubrics.length}`}</span>
                   <a
-                    className="button-link small-button"
+                    className={`button-link small-button ${index === 0 ? "manual-start-button" : ""}`}
                     href={`/manual/${encodeURIComponent(task.id)}?url=${encodeURIComponent(url)}`}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    手动检查
+                    {index === 0 ? "手动检查(请从这里开始)" : "手动检查"}
                   </a>
                   <code className="manual-score-array">{result ? JSON.stringify(result.scores) : "[]"}</code>
                 </li>
@@ -821,63 +833,19 @@ function validateUrls(values: string[]) {
 function parseRubricsInput(value: string): Rubric[] {
   const text = value.trim();
   if (!text) return [];
-  if (text.replace(/\s/g, "").length <= 50) {
-    throw new Error("用户输入的 Rubrics 需要超过 50 个字；不填则自动生成。");
-  }
-
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    const items = Array.isArray(parsed)
-      ? parsed
-      : parsed && typeof parsed === "object" && Array.isArray((parsed as { rubrics?: unknown }).rubrics)
-        ? (parsed as { rubrics: unknown[] }).rubrics
-        : null;
-    if (items) return items.map((item, index) => normalizeRubricItem(item, index));
-  } catch {
-    // Fall through to numbered/plain-line parsing.
-  }
 
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^(?:R?\d+[\.\、\)\s]+|[-*]\s+)/i, "").trim())
     .filter(Boolean);
 
-  if (!lines.length) throw new Error("Rubrics 内容为空或格式不正确。");
+  if (!lines.length) throw new Error("请按一行一条规则填写 Rubrics，或留空自动生成。");
   return lines.map((description, index) => ({
     id: `R${index + 1}`,
     name: `规则 ${index + 1}`,
     description,
     evidenceHints: [],
   }));
-}
-
-function normalizeRubricItem(item: unknown, index: number): Rubric {
-  if (typeof item === "string") {
-    const description = item.trim();
-    if (!description) throw new Error(`第 ${index + 1} 条 Rubric 为空。`);
-    return {
-      id: `R${index + 1}`,
-      name: `规则 ${index + 1}`,
-      description,
-      evidenceHints: [],
-    };
-  }
-
-  if (item && typeof item === "object") {
-    const entry = item as Partial<Rubric>;
-    const description = String(entry.description || entry.name || "").trim();
-    if (!description) throw new Error(`第 ${index + 1} 条 Rubric 缺少 description。`);
-    return {
-      id: String(entry.id || `R${index + 1}`),
-      name: String(entry.name || `规则 ${index + 1}`),
-      description,
-      evidenceHints: Array.isArray(entry.evidenceHints) ? entry.evidenceHints.map(String) : [],
-    };
-  }
-
-  throw new Error(`第 ${index + 1} 条 Rubric 格式不正确。`);
 }
 
 function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
