@@ -142,6 +142,13 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     commitAnswer(0, reason);
   }
 
+  function cancelFailReason() {
+    setPendingFailIndex(null);
+    setFailReason("");
+    setLastChoice(null);
+    setNotice("");
+  }
+
   function restartCheck() {
     if (!task) return;
     clearDraft(taskId, url);
@@ -185,6 +192,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                   />
                   <button className="manual-rubric-toggle fail-choice" onClick={submitFailReason} disabled={saving} type="button">
                     确认
+                  </button>
+                  <button className="manual-rubric-toggle" onClick={cancelFailReason} disabled={saving} type="button">
+                    取消
                   </button>
                 </div>
               ) : (
