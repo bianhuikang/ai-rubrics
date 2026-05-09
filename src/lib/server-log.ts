@@ -33,6 +33,19 @@ export function logEvidence(taskId: string, evidence: PageEvidence) {
         controls: evidence.controls.slice(0, 30),
         layout: evidence.layout,
         interactions: evidence.interactions,
+        rubricEvidence: evidence.rubricEvidence.map((item) => ({
+          rubricId: item.rubricId,
+          keywords: item.keywords,
+          textMatches: item.textMatches.length,
+          controls: item.controls.length,
+          elements: item.elements.length,
+          technologyMatches: item.technologyMatches,
+          relatedInteractions: item.relatedInteractions.map((probe) => probe.name),
+          plannedChecks: (item.plannedChecks || []).map((check) => ({
+            action: check.action,
+            passed: check.passed,
+          })),
+        })),
         screenshotPath: evidence.screenshotPath,
         errors: evidence.errors,
       },
@@ -43,8 +56,11 @@ export function logEvidence(taskId: string, evidence: PageEvidence) {
 }
 
 export function logRubrics(taskId: string, rubrics: Rubric[]) {
-  console.log(`[judge][${taskId}] rubrics generated`);
+  console.log(`\n[judge][${taskId}] ===== RUBRICS GENERATED (${rubrics.length}) =====`);
+  console.log(rubrics.map((rubric, index) => `${index + 1}. ${rubric.description}`).join("\n"));
+  console.log(`[judge][${taskId}] ===== RUBRICS JSON =====`);
   console.log(JSON.stringify(rubrics, null, 2));
+  console.log(`[judge][${taskId}] ===== END RUBRICS =====\n`);
 }
 
 export function logScores(taskId: string, url: string, scores: number[], reasons: string[]) {

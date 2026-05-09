@@ -8,6 +8,7 @@ const updateSchema = z.object({
   name: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
   urls: z.array(z.string().url()).min(1).optional(),
+  mode: z.enum(["auto", "manual"]).optional(),
   rubrics: z
     .array(
       z.object({
@@ -32,5 +33,5 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const task = getTask(id);
   if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
   const patch = updateSchema.parse(await request.json());
-  return NextResponse.json(updateTask(id, patch));
+  return NextResponse.json(updateTask(id, patch.rubrics ? { ...patch, rubricsSource: "user" } : patch));
 }

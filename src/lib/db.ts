@@ -2,10 +2,20 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_RUBRIC_PROMPT, DEFAULT_SCORING_PROMPT } from "./default-prompts";
-import type { PageEvidence, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskStatus } from "./types";
+import type { PageEvidence, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskMode, TaskStatus } from "./types";
 
 const dataDir = path.join(process.cwd(), "data");
 const dbPath = path.join(dataDir, "app.db");
+
+const DEFAULT_MODEL_CONFIG = {
+  name: "gpt",
+  provider: "openai-chat-completions",
+  baseUrl: "https://codex101.site/v1/chat/completions",
+  apiKey: "sk-c2d1h3gCUZ5ic3x02z6mkWxIPnRRhDxNRUSohi0QbYqDb9aY",
+  model: "gpt-5.4",
+  temperature: 0.2,
+  extraRequestParams: "{}",
+};
 
 let db: Database.Database | undefined;
 
@@ -50,6 +60,8 @@ export function getDb() {
         prompt TEXT NOT NULL,
         urls TEXT NOT NULL,
         rubrics TEXT NOT NULL,
+        rubricsSource TEXT NOT NULL DEFAULT 'none',
+        mode TEXT NOT NULL DEFAULT 'manual',
         status TEXT NOT NULL,
         error TEXT,
         createdAt TEXT NOT NULL,
@@ -92,10 +104,23 @@ export function getDb() {
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS app_preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
     `);
     const columns = db.prepare("PRAGMA table_info(settings)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "extraRequestParams")) {
       db.exec("ALTER TABLE settings ADD COLUMN extraRequestParams TEXT NOT NULL DEFAULT '{}'");
+    }
+    const taskColumns = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!taskColumns.some((column) => column.name === "rubricsSource")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN rubricsSource TEXT NOT NULL DEFAULT 'generated'");
+    }
+    if (!taskColumns.some((column) => column.name === "mode")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'manual'");
     }
 
     const existing = db.prepare("SELECT id FROM settings WHERE id = 1").get();
@@ -104,12 +129,12 @@ export function getDb() {
         INSERT INTO settings (id, provider, baseUrl, apiKey, model, temperature, extraRequestParams, rubricPrompt, scoringPrompt, updatedAt)
         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        "openai-chat-completions",
-        "https://api.example.com/chat/completions",
-        "",
-        "gpt-4.1-mini",
-        0.2,
-        "{}",
+        DEFAULT_MODEL_CONFIG.provider,
+        DEFAULT_MODEL_CONFIG.baseUrl,
+        DEFAULT_MODEL_CONFIG.apiKey,
+        DEFAULT_MODEL_CONFIG.model,
+        DEFAULT_MODEL_CONFIG.temperature,
+        DEFAULT_MODEL_CONFIG.extraRequestParams,
         DEFAULT_RUBRIC_PROMPT,
         DEFAULT_SCORING_PROMPT,
         now(),
@@ -154,7 +179,6 @@ export function getDb() {
 
     const configCount = db.prepare("SELECT COUNT(*) AS count FROM model_configs").get() as { count: number };
     if (!configCount.count) {
-      const legacy = db.prepare("SELECT * FROM settings WHERE id = 1").get() as Record<string, unknown> | undefined;
       const timestamp = now();
       db.prepare(`
         INSERT INTO model_configs (
@@ -164,17 +188,26 @@ export function getDb() {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       `).run(
         crypto.randomUUID(),
-        "默认配置",
-        String(legacy?.provider ?? "openai-chat-completions"),
-        String(legacy?.baseUrl ?? "https://api.example.com/chat/completions"),
-        String(legacy?.apiKey ?? ""),
-        String(legacy?.model ?? "gpt-4.1-mini"),
-        Number(legacy?.temperature ?? 0.2),
-        String(legacy?.extraRequestParams ?? "{}"),
-        String(legacy?.rubricPrompt ?? DEFAULT_RUBRIC_PROMPT),
-        String(legacy?.scoringPrompt ?? DEFAULT_SCORING_PROMPT),
+        DEFAULT_MODEL_CONFIG.name,
+        DEFAULT_MODEL_CONFIG.provider,
+        DEFAULT_MODEL_CONFIG.baseUrl,
+        DEFAULT_MODEL_CONFIG.apiKey,
+        DEFAULT_MODEL_CONFIG.model,
+        DEFAULT_MODEL_CONFIG.temperature,
+        DEFAULT_MODEL_CONFIG.extraRequestParams,
+        DEFAULT_RUBRIC_PROMPT,
+        DEFAULT_SCORING_PROMPT,
         timestamp,
         timestamp,
+      );
+    }
+
+    const manualCheckMode = db.prepare("SELECT key FROM app_preferences WHERE key = ?").get("manualCheckMode");
+    if (!manualCheckMode) {
+      db.prepare("INSERT INTO app_preferences (key, value, updatedAt) VALUES (?, ?, ?)").run(
+        "manualCheckMode",
+        "true",
+        now(),
       );
     }
 
@@ -182,6 +215,9 @@ export function getDb() {
       "你是一个前端网页产物评测专家。你会收到用户给出的需求 prompt，以及多个候选网页产物的 Playwright 证据摘要。请基于需求和候选产物差异，生成 4-10 条中等粒度 rubrics%",
       "你是一个前端网页产物评测专家。你会收到用户给出的需求 prompt，以及多个候选网页产物的 Playwright 证据摘要。请基于需求和候选产物差异，生成 7-10 条中等粒度 rubrics%",
       "你是一个前端网页产物评测专家。你会收到用户给出的需求 prompt，以及多个候选网页产物的 Playwright 证据摘要。请基于原始需求和候选产物差异，生成 5-12 条中等粒度 rubrics%",
+      "你是甲方前端网页产物验收 rubrics 标注员。你会收到需求 prompt 和多个候选网页产物的 Playwright 证据摘要。请生成 6-9 条“甲方验收表格风格”的中等偏粗粒度 rubrics%",
+      "你是甲方前端网页产物验收 rubrics 标注员。你会收到需求 prompt。请先只基于原始需求生成 5-9 条“甲方验收表格风格”的中等偏粗粒度 rubrics%",
+      "你是甲方前端网页产物验收 rubrics 标注员。你会收到需求 prompt。请先只基于原始需求生成 4-10 条“甲方验收表格风格”的中等粒度 rubrics%",
     ]) {
       db.prepare("UPDATE settings SET rubricPrompt = ? WHERE rubricPrompt LIKE ?").run(DEFAULT_RUBRIC_PROMPT, oldPromptPattern);
       db.prepare("UPDATE model_configs SET rubricPrompt = ? WHERE rubricPrompt LIKE ?").run(DEFAULT_RUBRIC_PROMPT, oldPromptPattern);
@@ -338,6 +374,26 @@ export function saveSettings(settings: Settings & { id?: string; name?: string }
   return updated;
 }
 
+export function getManualCheckMode(): boolean {
+  const row = getDb()
+    .prepare("SELECT value FROM app_preferences WHERE key = ?")
+    .get("manualCheckMode") as { value: string } | undefined;
+  return row?.value === "true";
+}
+
+export function saveManualCheckMode(enabled: boolean): boolean {
+  getDb()
+    .prepare(
+      `
+      INSERT INTO app_preferences (key, value, updatedAt)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt
+    `,
+    )
+    .run("manualCheckMode", enabled ? "true" : "false", now());
+  return enabled;
+}
+
 export function listTasks(): Task[] {
   const rows = getDb()
     .prepare(
@@ -368,23 +424,36 @@ export function getTask(id: string): Task | null {
   return row ? rowToTask(row) : null;
 }
 
-export function createTask(input: { id?: string; name?: string; prompt: string; urls: string[] }): Task {
+export function createTask(input: { id?: string; name?: string; prompt: string; urls: string[]; rubrics?: Task["rubrics"]; mode?: TaskMode }): Task {
   const id = input.id?.trim() || crypto.randomUUID();
   const existing = getTask(id);
   if (existing) throw new Error(`Task ${id} already exists`);
   const timestamp = now();
+  const rubrics = input.rubrics ?? [];
+  const rubricsSource = rubrics.length ? "user" : "none";
   getDb()
     .prepare(`
-      INSERT INTO tasks (id, name, prompt, urls, rubrics, status, error, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      INSERT INTO tasks (id, name, prompt, urls, rubrics, rubricsSource, mode, status, error, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
     `)
-    .run(id, input.name?.trim() || id, input.prompt, JSON.stringify(input.urls), "[]", "queued", timestamp, timestamp);
+    .run(
+      id,
+      input.name?.trim() || id,
+      input.prompt,
+      JSON.stringify(input.urls),
+      JSON.stringify(rubrics),
+      rubricsSource,
+      input.mode ?? "manual",
+      "queued",
+      timestamp,
+      timestamp,
+    );
   return getTask(id)!;
 }
 
 export function updateTask(
   id: string,
-  patch: Partial<Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "error">> & { status?: TaskStatus },
+  patch: Partial<Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "rubricsSource" | "mode" | "error">> & { status?: TaskStatus },
 ): Task {
   const task = getTask(id);
   if (!task) throw new Error("Task not found");
@@ -392,7 +461,7 @@ export function updateTask(
   getDb()
     .prepare(`
       UPDATE tasks
-      SET name = ?, prompt = ?, urls = ?, rubrics = ?, status = ?, error = ?, updatedAt = ?
+      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, mode = ?, status = ?, error = ?, updatedAt = ?
       WHERE id = ?
     `)
     .run(
@@ -400,6 +469,8 @@ export function updateTask(
       next.prompt,
       JSON.stringify(next.urls),
       JSON.stringify(next.rubrics),
+      next.rubricsSource,
+      next.mode,
       next.status,
       next.error ?? null,
       next.updatedAt,
@@ -410,6 +481,10 @@ export function updateTask(
 
 export function deleteResultsForTask(taskId: string) {
   getDb().prepare("DELETE FROM results WHERE taskId = ?").run(taskId);
+}
+
+export function deleteResultForTaskUrl(taskId: string, url: string) {
+  getDb().prepare("DELETE FROM results WHERE taskId = ? AND url = ?").run(taskId, url);
 }
 
 export function deleteTaskLogsForTask(taskId: string) {
@@ -478,13 +553,13 @@ export function listResults(taskId: string): ScoreResult[] {
     url: String(row.url),
     scores: parseJson<number[]>(String(row.scores), []),
     reasons: parseJson<string[]>(String(row.reasons), []),
-    evidence: parseJson<PageEvidence>(String(row.evidence), emptyEvidence(String(row.url))),
+    evidence: parseJson<PageEvidence>(String(row.evidence), makeEmptyEvidence(String(row.url))),
     rawResponse: String(row.rawResponse),
     createdAt: String(row.createdAt),
   }));
 }
 
-function emptyEvidence(url: string): PageEvidence {
+export function makeEmptyEvidence(url: string): PageEvidence {
   return {
     url,
     finalUrl: url,
@@ -501,6 +576,7 @@ function emptyEvidence(url: string): PageEvidence {
     responsive: {},
     motion: {},
     interactions: [],
+    rubricEvidence: [],
     errors: ["Stored evidence could not be parsed."],
   };
 }
@@ -512,6 +588,10 @@ function rowToTask(row: Record<string, unknown>): Task {
     prompt: String(row.prompt),
     urls: parseJson<string[]>(String(row.urls), []),
     rubrics: parseJson(String(row.rubrics), []),
+    rubricsSource: ["user", "generated", "none"].includes(String(row.rubricsSource))
+      ? (String(row.rubricsSource) as Task["rubricsSource"])
+      : "generated",
+    mode: ["auto", "manual"].includes(String(row.mode)) ? (String(row.mode) as TaskMode) : "manual",
     status: String(row.status) as TaskStatus,
     error: row.error ? String(row.error) : undefined,
     resultCount: Number(row.resultCount ?? 0),

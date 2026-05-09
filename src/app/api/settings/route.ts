@@ -5,6 +5,7 @@ import {
   createSettingsConfig,
   deleteSettingsConfig,
   getActiveSettingsConfig,
+  getManualCheckMode,
   listSettingsConfigs,
   saveSettings,
 } from "@/lib/db";
@@ -51,6 +52,7 @@ function settingsResponse() {
     settings: settings satisfies Settings,
     configs: listSettingsConfigs(),
     activeConfigId: active.id,
+    manualCheckMode: getManualCheckMode(),
   };
 }
 

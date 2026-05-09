@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_RUBRIC_PROMPT, DEFAULT_SCORING_PROMPT } from "@/lib/default-prompts";
-import type { ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskStatus } from "@/lib/types";
+import type { Rubric, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskStatus } from "@/lib/types";
 
 const emptySettings: Settings = {
   apiFormat: "openai-chat-completions",
@@ -24,6 +24,7 @@ type SettingsResponse = {
   settings: Settings;
   configs: SettingsConfig[];
   activeConfigId: string;
+  manualCheckMode: boolean;
 };
 
 const runningStatuses: TaskStatus[] = ["queued", "generating-rubrics", "scoring"];
@@ -46,6 +47,8 @@ export function Dashboard() {
   const [taskId, setTaskId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [urlsText, setUrlsText] = useState("");
+  const [rubricsText, setRubricsText] = useState("");
+  const manualMode = true;
 
   useEffect(() => {
     void refreshAll();
@@ -62,8 +65,7 @@ export function Dashboard() {
   }, [activeTask?.id]);
 
   useEffect(() => {
-    const shouldPoll =
-      runningTaskIds.size > 0 || tasks.some((task) => runningStatuses.includes(task.status));
+    const shouldPoll = runningTaskIds.size > 0;
     if (!shouldPoll) return;
 
     const timer = window.setInterval(() => {
@@ -75,7 +77,18 @@ export function Dashboard() {
     }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [activeTask?.id, runningTaskIds, tasks]);
+  }, [activeTask?.id, runningTaskIds]);
+
+  useEffect(() => {
+    if (!activeTask || activeTask.mode !== "manual" || activeTask.status === "scored" || activeTask.status === "error") return;
+
+    const timer = window.setInterval(() => {
+      void refreshAll({ keepSelection: true });
+      void loadResults(activeTask.id);
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [activeTask?.id, activeTask?.mode, activeTask?.status]);
 
   const activeTotals = useMemo(() => {
     return results.map((result) => ({
@@ -196,14 +209,11 @@ export function Dashboard() {
 
   async function createTask() {
     const id = taskId.trim();
-    if (!id) {
-      setNotice({ kind: "error", text: "请填写任务 ID。" });
-      return;
-    }
-
     let urls: string[];
+    let rubrics: Rubric[];
     try {
       urls = parseUrls(urlsText);
+      rubrics = parseRubricsInput(rubricsText);
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
       return;
@@ -213,7 +223,7 @@ export function Dashboard() {
       const response = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, prompt, urls }),
+        body: JSON.stringify({ id: id || undefined, prompt, urls, rubrics, mode: manualMode ? "manual" : "auto" }),
       });
       if (!response.ok) throw new Error(await response.text());
       const task = (await response.json()) as Task;
@@ -271,9 +281,11 @@ export function Dashboard() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <h1>AI Rubrics Judge</h1>
-          <p>批量生成 rubrics，自动抓取网页产物并输出 0/1 评分矩阵。</p>
+        <div className="topbar-title">
+          <div className="title-row">
+            <h1>AI Rubrics Judge</h1>
+          </div>
+    
         </div>
         <div className="topbar-actions">
           {notice ? <div className={`notice ${notice.kind}`}>{notice.text}</div> : null}
@@ -304,6 +316,15 @@ export function Dashboard() {
           <label>
             产物 URL 数组
             <textarea value={urlsText} onChange={(event) => setUrlsText(event.target.value)} rows={8} />
+          </label>
+          <label>
+            Rubrics（可选）
+            <textarea
+              value={rubricsText}
+              onChange={(event) => setRubricsText(event.target.value)}
+              rows={8}
+              placeholder={"留空则自动生成；也可粘贴编号列表或 JSON rubrics。"}
+            />
           </label>
         </section>
 
@@ -356,7 +377,7 @@ export function Dashboard() {
                         <td>
                           <button
                             className="small-button"
-                            disabled={runningStatuses.includes(task.status) || runningTaskIds.has(task.id)}
+                            disabled={runningTaskIds.has(task.id)}
                             onClick={(event) => {
                               event.stopPropagation();
                               setNotice({ kind: "info", text: `任务 ${task.id} 已重新开始。` });
@@ -391,7 +412,7 @@ export function Dashboard() {
             </div>
             {activeTask ? (
               <div className="actions">
-                <button onClick={rerunActiveTask} disabled={runningStatuses.includes(activeTask.status)}>
+                <button onClick={rerunActiveTask} disabled={runningTaskIds.has(activeTask.id)}>
                   重跑
                 </button>
                 <a className="button-link" href={`/api/tasks/${activeTask.id}/export?format=json`} target="_blank" rel="noreferrer">
@@ -540,24 +561,90 @@ function ResultView({
   totals: Array<{ url: string; total: number; max: number }>;
   logs: TaskLog[];
 }) {
-  const rubricsCopyText = JSON.stringify(task.rubrics, null, 2);
-  const allScoresReady = task.status === "scored" && results.length >= task.urls.length;
-  const scoreCopyText = JSON.stringify(
-    results.map((result) => ({
-      url: result.url,
-      scores: result.scores,
-      total: result.scores.reduce((sum, score) => sum + score, 0),
-      reasons: result.reasons,
-    })),
-    null,
-    2,
-  );
+  const rubricsCopyText = task.rubrics.map((rubric, index) => `${index + 1}. ${rubric.description}`).join("\n");
+  const orderedResults = task.urls
+    .map((url) => results.find((result) => result.url === url))
+    .filter((result): result is ScoreResult => Boolean(result));
+  const allScoresReady = task.status === "scored" && orderedResults.length >= task.urls.length;
+  const scoreCopyText = JSON.stringify(orderedResults.map((result) => result.scores));
+  const manualFailSummaries = task.mode === "manual" ? summarizeManualFailReasons(task, results) : [];
+  const manualFailCopyText = manualFailSummaries.join("\n");
 
   if (task.status === "error") {
     return (
       <div className="results-wrap process-only">
         <ProcessPanel task={task} logs={logs} />
         <p className="error-text">{task.error || "任务执行失败。"}</p>
+      </div>
+    );
+  }
+
+  if (task.mode === "manual" && task.rubrics.length > 0) {
+    return (
+      <div className="results-wrap">
+        <section className="rubric-section">
+          <div className="copy-bar">
+            <button className="small-button" onClick={() => void copyText(rubricsCopyText)}>
+              复制 Rubrics
+            </button>
+            <span>Rubrics ({task.rubrics.length})</span>
+          </div>
+          <ol className="rubric-list">
+            {task.rubrics.map((rubric) => (
+              <li key={rubric.id}>
+                <span>{rubric.id}. {rubric.description}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="score-section">
+          <div className="copy-bar">
+            <button className="small-button" onClick={() => void copyText(scoreCopyText)} disabled={!orderedResults.length}>
+              复制打分
+            </button>
+            <span>手动检查 URL ({orderedResults.length}/{task.urls.length})</span>
+          </div>
+          <ul className="manual-url-list">
+            {task.urls.map((url, index) => {
+              const result = results.find((item) => item.url === url);
+              const progress = result ? task.rubrics.length : 0;
+              return (
+                <li key={url}>
+                  <a href={url} target="_blank" rel="noreferrer" title={url}>
+                    {index + 1}. {urlTail(url)}
+                  </a>
+                  <span className="manual-score-chip">{`${progress}/${task.rubrics.length}`}</span>
+                  <a
+                    className="button-link small-button"
+                    href={`/manual/${encodeURIComponent(task.id)}?url=${encodeURIComponent(url)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    手动检查
+                  </a>
+                  <code className="manual-score-array">{result ? JSON.stringify(result.scores) : "[]"}</code>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
+        {manualFailSummaries.length ? (
+          <section className="manual-reason-section">
+            <div className="copy-bar">
+              <button className="small-button" onClick={() => void copyText(manualFailCopyText)}>
+                复制原因
+              </button>
+              <span>不符合原因汇总</span>
+            </div>
+            <ol className="manual-reason-list">
+              {manualFailSummaries.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
       </div>
     );
   }
@@ -573,16 +660,15 @@ function ResultView({
 
   return (
     <div className="results-wrap">
-      <ProcessPanel task={task} logs={logs} />
       <section className="rubric-section">
         <div className="copy-bar">
-          <span>Rubrics ({task.rubrics.length})</span>
           <button
             className="small-button"
             onClick={() => void copyText(rubricsCopyText)}
           >
             复制 Rubrics
           </button>
+          <span>Rubrics ({task.rubrics.length})</span>
         </div>
         <ol className="rubric-list">
           {task.rubrics.map((rubric) => (
@@ -595,10 +681,10 @@ function ResultView({
 
       <section className="score-section">
         <div className="copy-bar">
-          <span>打分结果</span>
           <button className="small-button" onClick={() => void copyText(scoreCopyText)}>
             复制打分
           </button>
+          <span>打分结果</span>
         </div>
         <div className="table-wrap">
           <table className="score-table">
@@ -615,7 +701,7 @@ function ResultView({
               </tr>
             </thead>
             <tbody>
-              {results.map((result, index) => {
+              {orderedResults.map((result, index) => {
                 const total = totals.find((item) => item.url === result.url);
                 return (
                   <tr key={result.id}>
@@ -732,10 +818,110 @@ function validateUrls(values: string[]) {
   return urls;
 }
 
+function parseRubricsInput(value: string): Rubric[] {
+  const text = value.trim();
+  if (!text) return [];
+  if (text.replace(/\s/g, "").length <= 50) {
+    throw new Error("用户输入的 Rubrics 需要超过 50 个字；不填则自动生成。");
+  }
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const items = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && Array.isArray((parsed as { rubrics?: unknown }).rubrics)
+        ? (parsed as { rubrics: unknown[] }).rubrics
+        : null;
+    if (items) return items.map((item, index) => normalizeRubricItem(item, index));
+  } catch {
+    // Fall through to numbered/plain-line parsing.
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^(?:R?\d+[\.\、\)\s]+|[-*]\s+)/i, "").trim())
+    .filter(Boolean);
+
+  if (!lines.length) throw new Error("Rubrics 内容为空或格式不正确。");
+  return lines.map((description, index) => ({
+    id: `R${index + 1}`,
+    name: `规则 ${index + 1}`,
+    description,
+    evidenceHints: [],
+  }));
+}
+
+function normalizeRubricItem(item: unknown, index: number): Rubric {
+  if (typeof item === "string") {
+    const description = item.trim();
+    if (!description) throw new Error(`第 ${index + 1} 条 Rubric 为空。`);
+    return {
+      id: `R${index + 1}`,
+      name: `规则 ${index + 1}`,
+      description,
+      evidenceHints: [],
+    };
+  }
+
+  if (item && typeof item === "object") {
+    const entry = item as Partial<Rubric>;
+    const description = String(entry.description || entry.name || "").trim();
+    if (!description) throw new Error(`第 ${index + 1} 条 Rubric 缺少 description。`);
+    return {
+      id: String(entry.id || `R${index + 1}`),
+      name: String(entry.name || `规则 ${index + 1}`),
+      description,
+      evidenceHints: Array.isArray(entry.evidenceHints) ? entry.evidenceHints.map(String) : [],
+    };
+  }
+
+  throw new Error(`第 ${index + 1} 条 Rubric 格式不正确。`);
+}
+
+function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
+  const summaries: string[] = [];
+  const resultByUrl = new Map(results.map((result) => [result.url, result]));
+
+  task.rubrics.forEach((_rubric, rubricIndex) => {
+    const groups = new Map<string, number[]>();
+    task.urls.forEach((url, urlIndex) => {
+      const result = resultByUrl.get(url);
+      if (!result || result.scores[rubricIndex] !== 0) return;
+      const reason = normalizeManualFailReason(result.reasons[rubricIndex]);
+      const pages = groups.get(reason) ?? [];
+      pages.push(urlIndex + 1);
+      groups.set(reason, pages);
+    });
+
+    groups.forEach((pages, reason) => {
+      const pageLabel =
+        pages.length === task.urls.length
+          ? "所有页面"
+          : pages.length === 1
+            ? `第${pages[0]}个页面`
+            : `第${pages.join("、")}个页面`;
+      summaries.push(`${pageLabel} -> 第${rubricIndex + 1}条rubrics -> ${reason}`);
+    });
+  });
+
+  return summaries;
+}
+
+function normalizeManualFailReason(reason: string | undefined) {
+  const value = reason?.trim();
+  if (!value || value === "人工未标记符合") return "未填写原因";
+  return value;
+}
+
 function taskProgress(task: Task) {
   if (task.status === "scored") return 100;
   if (task.status === "error") return Math.min(99, Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 100));
   if (task.status === "generating-rubrics") return 10;
+  if (task.status === "rubrics-ready") {
+    return task.mode === "manual" ? Math.min(99, 20 + Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 75)) : 20;
+  }
   if (task.status === "scoring") {
     return Math.min(99, 15 + Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 80));
   }
