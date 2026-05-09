@@ -201,6 +201,7 @@ export function getDb() {
         timestamp,
       );
     }
+    ensureDefaultModelConfig(db);
 
     const manualCheckMode = db.prepare("SELECT key FROM app_preferences WHERE key = ?").get("manualCheckMode");
     if (!manualCheckMode) {
@@ -233,6 +234,108 @@ export function getDb() {
   }
 
   return db;
+}
+
+function ensureDefaultModelConfig(database: Database.Database) {
+  const timestamp = now();
+  const existingDefault = database
+    .prepare("SELECT id FROM model_configs WHERE name = ? ORDER BY createdAt ASC LIMIT 1")
+    .get(DEFAULT_MODEL_CONFIG.name) as { id: string } | undefined;
+
+  if (!existingDefault) {
+    const activeCount = database.prepare("SELECT COUNT(*) AS count FROM model_configs WHERE isActive = 1").get() as {
+      count: number;
+    };
+    database
+      .prepare(
+        `
+        INSERT INTO model_configs (
+          id, name, provider, baseUrl, apiKey, model, temperature, extraRequestParams,
+          rubricPrompt, scoringPrompt, isActive, createdAt, updatedAt
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        crypto.randomUUID(),
+        DEFAULT_MODEL_CONFIG.name,
+        DEFAULT_MODEL_CONFIG.provider,
+        DEFAULT_MODEL_CONFIG.baseUrl,
+        DEFAULT_MODEL_CONFIG.apiKey,
+        DEFAULT_MODEL_CONFIG.model,
+        DEFAULT_MODEL_CONFIG.temperature,
+        DEFAULT_MODEL_CONFIG.extraRequestParams,
+        DEFAULT_RUBRIC_PROMPT,
+        DEFAULT_SCORING_PROMPT,
+        activeCount.count ? 0 : 1,
+        timestamp,
+        timestamp,
+      );
+  } else {
+    database
+      .prepare(
+        `
+        UPDATE model_configs
+        SET provider = ?, baseUrl = ?, apiKey = ?, model = ?, temperature = ?, extraRequestParams = ?, updatedAt = ?
+        WHERE id = ?
+          AND (
+            baseUrl = ''
+            OR baseUrl = 'https://api.example.com/chat/completions'
+            OR apiKey = ''
+            OR model = ''
+            OR model = 'gpt-4.1-mini'
+          )
+      `,
+      )
+      .run(
+        DEFAULT_MODEL_CONFIG.provider,
+        DEFAULT_MODEL_CONFIG.baseUrl,
+        DEFAULT_MODEL_CONFIG.apiKey,
+        DEFAULT_MODEL_CONFIG.model,
+        DEFAULT_MODEL_CONFIG.temperature,
+        DEFAULT_MODEL_CONFIG.extraRequestParams,
+        timestamp,
+        existingDefault.id,
+      );
+  }
+
+  const active = database
+    .prepare("SELECT id, baseUrl, apiKey, model FROM model_configs WHERE isActive = 1 ORDER BY updatedAt DESC LIMIT 1")
+    .get() as { id: string; baseUrl: string; apiKey: string; model: string } | undefined;
+  const activeIsPlaceholder =
+    !active || !active.apiKey || !active.model || active.baseUrl === "https://api.example.com/chat/completions";
+  if (activeIsPlaceholder) {
+    const defaultRow = database.prepare("SELECT id FROM model_configs WHERE name = ? LIMIT 1").get(DEFAULT_MODEL_CONFIG.name) as {
+      id: string;
+    };
+    database.prepare("UPDATE model_configs SET isActive = 0").run();
+    database.prepare("UPDATE model_configs SET isActive = 1, updatedAt = ? WHERE id = ?").run(timestamp, defaultRow.id);
+  }
+
+  database
+    .prepare(
+      `
+      UPDATE settings
+      SET provider = ?, baseUrl = ?, apiKey = ?, model = ?, temperature = ?, extraRequestParams = ?, updatedAt = ?
+      WHERE id = 1
+        AND (
+          baseUrl = ''
+          OR baseUrl = 'https://api.example.com/chat/completions'
+          OR apiKey = ''
+          OR model = ''
+          OR model = 'gpt-4.1-mini'
+        )
+    `,
+    )
+    .run(
+      DEFAULT_MODEL_CONFIG.provider,
+      DEFAULT_MODEL_CONFIG.baseUrl,
+      DEFAULT_MODEL_CONFIG.apiKey,
+      DEFAULT_MODEL_CONFIG.model,
+      DEFAULT_MODEL_CONFIG.temperature,
+      DEFAULT_MODEL_CONFIG.extraRequestParams,
+      timestamp,
+    );
 }
 
 export function getSettings(): Settings {

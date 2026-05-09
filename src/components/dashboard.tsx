@@ -307,7 +307,7 @@ export function Dashboard() {
           </div>
           <label>
             任务 ID
-            <input value={taskId} onChange={(event) => setTaskId(event.target.value)} />
+            <input value={taskId} onChange={(event) => setTaskId(event.target.value)} placeholder="不填自动生成" />
           </label>
           <label>
             Prompt
