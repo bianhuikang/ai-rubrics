@@ -56,6 +56,37 @@ const evidencePlanSchema = z.object({
     .max(32),
 });
 
+const RUBRIC_JSON_OUTPUT_INSTRUCTION = `Output strict JSON only. Do not include Markdown, prose, comments, or code fences.
+The JSON object must have exactly this top-level shape:
+{
+  "rubrics": [
+    {
+      "id": "R1",
+      "name": "short label",
+      "description": "one sentence acceptance requirement",
+      "evidenceHints": ["observable evidence hint"]
+    }
+  ]
+}
+Rules for the schema:
+- rubrics must contain 4-10 items.
+- id must be R1, R2, R3, ... in order.
+- name must be a short label.
+- description must be one checklist-style sentence.
+- evidenceHints must be an array of strings; use [] if no useful hints exist.`;
+
+const SCORING_JSON_OUTPUT_INSTRUCTION = `Output strict JSON only. Do not include Markdown, prose, comments, or code fences.
+The JSON object must have exactly this top-level shape:
+{
+  "scores": [1, 0, 1],
+  "reasons": ["short evidence reason for rubric 1", "short evidence reason for rubric 2", "short evidence reason for rubric 3"]
+}
+Rules for the schema:
+- scores must contain exactly one integer per rubric.
+- each score must be 1 or 0.
+- reasons must contain exactly one string per rubric.
+- each reason must briefly name the key evidence for its corresponding score.`;
+
 export async function generateRubrics(
   settings: Settings,
   prompt: string,
@@ -65,13 +96,26 @@ export async function generateRubrics(
   }> = [],
 ): Promise<Rubric[]> {
   const raw = await callJsonModel(settings, [
-    { role: "system", content: settings.rubricPrompt },
+    {
+      role: "system",
+      content: [settings.rubricPrompt.trim(), RUBRIC_JSON_OUTPUT_INSTRUCTION].filter(Boolean).join("\n\n"),
+    },
     {
       role: "user",
       content: JSON.stringify(
         {
           prompt,
           candidates,
+          outputSchema: {
+            rubrics: [
+              {
+                id: "R1",
+                name: "short label",
+                description: "one sentence acceptance requirement",
+                evidenceHints: ["observable evidence hint"],
+              },
+            ],
+          },
           instruction:
             "Generate 4-10 medium-granularity client-acceptance rubrics from the original prompt first; candidate evidence, if present, is only a visibility hint and must not introduce new requirements. Keep only the most important explicit requirements that materially affect task completion or result usability. Each rubric must check exactly one thing, be stable to judge from code, page behavior, output, or static evidence, and avoid subjective language such as beautiful, friendly, smooth, modern, clear structure, modular design, or code style. Remove duplicate requirements with the same meaning. Each description must be exactly one checklist-style sentence, without score 1/0 explanations or boundary prose. Prefer rubrics about operable workflows that Playwright can verify: buttons/links can be clicked, forms can be filled and submitted/saved, saved or newly created content appears on the page, drag/drop changes page state, localStorage persists a user choice, URL/route or visible state changes after interaction, basic responsive layout works, and required controls/resources exist. Do not create rubrics that require subjective human judgment or unstable automation, such as proving audio is audible, exact hidden easter-egg triggering, complex drag paths, latest-content freshness, animation smoothness, or all hover details. If the prompt includes such hard-to-verify requirements, rewrite them as observable alternatives, such as resource presence, control presence, or state change after interaction.",
         },
@@ -276,7 +320,10 @@ export async function scorePage(input: {
   };
 
   const scoringMessages: ChatMessage[] = [
-    { role: "system", content: input.settings.scoringPrompt },
+    {
+      role: "system",
+      content: [input.settings.scoringPrompt.trim(), SCORING_JSON_OUTPUT_INSTRUCTION].filter(Boolean).join("\n\n"),
+    },
     {
       role: "user",
       content: JSON.stringify(
@@ -284,6 +331,7 @@ export async function scorePage(input: {
           prompt: input.prompt,
           rubrics: input.rubrics,
           evidence: evidenceForModel,
+          outputContract: `Return {"scores": number[], "reasons": string[]} with both arrays exactly length ${input.rubrics.length}; every score must be 0 or 1.`,
         },
         null,
         2,

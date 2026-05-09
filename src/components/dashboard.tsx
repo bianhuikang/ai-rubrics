@@ -6,7 +6,7 @@ import type { Rubric, ScoreResult, Settings, SettingsConfig, Task, TaskLog, Task
 
 const emptySettings: Settings = {
   apiFormat: "openai-chat-completions",
-  endpointUrl: "https://api.example.com/chat/completions",
+  endpointUrl: "",
   apiKey: "",
   model: "",
   temperature: 0.2,

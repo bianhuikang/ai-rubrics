@@ -29,19 +29,7 @@ export const DEFAULT_RUBRIC_PROMPT = `你是甲方前端网页产物验收 rubri
 - 对作品集、博客、多页面站点任务，按“结构导航、个人/品牌信息、内容列表与详情、项目/作品展示、联系/外链、主题/响应式”合并成少量规则。
 - 不要套用固定模板；只有原始 prompt 明确要求时，才写特定 id/class、保存、评论、协作面板等规则。
 - 可以参考候选证据判断哪些要求可观察，但 rubric 必须来自原始 prompt，不要引用候选编号或候选特有偶然细节。
-- 输出严格 JSON，不要 Markdown。
-
-JSON 格式：
-{
-  "rubrics": [
-    {
-      "id": "R1",
-      "name": "短标签",
-      "description": "一句话验收标准。",
-      "evidenceHints": ["可观察证据 1", "可观察证据 2"]
-    }
-  ]
-}`;
+`;
 
 export const DEFAULT_SCORING_PROMPT = `你是严格的网页产物评测员。你会收到原始需求 prompt、一组 rubrics，以及 Playwright 抓取的页面证据。请逐条判断该网页是否满足每条 rubric。
 
@@ -64,11 +52,4 @@ export const DEFAULT_SCORING_PROMPT = `你是严格的网页产物评测员。�
 - 对音视频播放、鼠标悬浮、拖拽、参数控制、游戏规则、乘客移动、转向灯、视差、渐入动画等行为要求，只有存在自动化交互或运行时变化证据才给 1。
 - 不要因为页面好看就替代功能判断。
 - 输出 scores 数组长度必须等于 rubrics 数量。
-- reasons 数组也必须等于 rubrics 数量，每条理由用一句话说明支持 1 或 0 的关键证据。
-- 输出严格 JSON，不要 Markdown。
-
-JSON 格式：
-{
-  "scores": [1, 0, 1],
-  "reasons": ["对应第 1 条 rubric 的简短证据", "对应第 2 条 rubric 的简短证据", "对应第 3 条 rubric 的简短证据"]
-}`;
+- reasons 数组也必须等于 rubrics 数量，每条理由用一句话说明支持 1 或 0 的关键证据。`;
