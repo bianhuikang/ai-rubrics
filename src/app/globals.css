@@ -366,6 +366,32 @@ select:focus {
   background: #edf5ff;
 }
 
+.task-table tbody tr.task-row-scored {
+  background: #f0fbf6;
+}
+
+.task-table tbody tr.task-row-scored:hover,
+.task-table tbody tr.task-row-scored.active-row {
+  background: #dcf6ea;
+}
+
+.task-table tbody tr.task-row-scored td:first-child {
+  border-left: 4px solid var(--success);
+}
+
+.task-table tbody tr.task-row-error {
+  background: #fff7f8;
+}
+
+.task-table tbody tr.task-row-error:hover,
+.task-table tbody tr.task-row-error.active-row {
+  background: #ffecef;
+}
+
+.task-table tbody tr.task-row-error td:first-child {
+  border-left: 4px solid var(--danger);
+}
+
 .mono {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;

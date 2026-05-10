@@ -461,7 +461,7 @@ export function Dashboard() {
                     return (
                       <tr
                         key={task.id}
-                        className={activeTask?.id === task.id ? "active-row" : ""}
+                        className={[activeTask?.id === task.id ? "active-row" : "", `task-row-${task.status}`].filter(Boolean).join(" ")}
                         onClick={() => {
                           setActiveTask(task);
                           void loadResults(task.id);
