@@ -91,6 +91,17 @@ button.primary:hover {
   transform: translateY(1px);
 }
 
+.danger-button {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.danger-button:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
 a {
   color: var(--primary);
 }
@@ -268,6 +279,20 @@ select:focus {
   font-size: 16px;
 }
 
+.task-title-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-title-line span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .settings-title {
   display: flex;
   align-items: baseline;
@@ -328,6 +353,23 @@ select:focus {
   padding: 8px;
   font-size: 13px;
   font-weight: 700;
+}
+
+.rubric-copy-with-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rubric-copy-with-warning strong {
+  border: 1px solid #f0b429;
+  border-radius: 6px;
+  background: #fff7df;
+  color: #8a4b00;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .task-table,
@@ -721,6 +763,41 @@ summary {
 
 .rubric-list span {
   color: var(--muted);
+}
+
+.editable-rubric-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  list-style: none;
+}
+
+.editable-rubric-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  margin: 0;
+}
+
+.editable-rubric-list input {
+  min-height: 32px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.rubric-edit-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.rubric-edit-error {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  color: var(--danger);
+  padding: 8px 10px;
+  font-size: 12px;
 }
 
 .manual-check-page {

@@ -486,6 +486,18 @@ export function deleteResultForTaskUrl(taskId: string, url: string) {
   getDb().prepare("DELETE FROM results WHERE taskId = ? AND url = ?").run(taskId, url);
 }
 
+export function updateResultScoresAndReasons(resultId: string, scores: number[], reasons: string[]) {
+  getDb()
+    .prepare(
+      `
+      UPDATE results
+      SET scores = ?, reasons = ?
+      WHERE id = ?
+    `,
+    )
+    .run(JSON.stringify(scores), JSON.stringify(reasons), resultId);
+}
+
 export function deleteTaskLogsForTask(taskId: string) {
   getDb().prepare("DELETE FROM task_logs WHERE taskId = ?").run(taskId);
 }

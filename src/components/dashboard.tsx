@@ -142,6 +142,15 @@ export function Dashboard() {
     }));
   }, [activeTask?.rubrics.length, results]);
 
+  const taskStats = useMemo(() => {
+    const completed = tasks.filter((task) => task.status === "scored").length;
+    return {
+      total: tasks.length,
+      completed,
+      unfinished: tasks.length - completed,
+    };
+  }, [tasks]);
+
   async function refreshAll(options: { keepSelection?: boolean } = {}) {
     const [settingsResponse, tasksResponse] = await Promise.all([fetch("/api/settings"), fetch("/api/tasks")]);
     const nextSettings = (await settingsResponse.json()) as SettingsResponse;
@@ -476,7 +485,12 @@ export function Dashboard() {
 
         <section className="compact-panel task-panel">
           <div className="panel-header">
-            <h2>任务列表</h2>
+            <div className="task-title-line">
+              <h2>任务列表</h2>
+              <span>总数 {taskStats.total}</span>
+              <span>已完成 {taskStats.completed}</span>
+              <span>未完成 {taskStats.unfinished}</span>
+            </div>
             <button onClick={() => void refreshAll({ keepSelection: true })}>刷新</button>
           </div>
           <div className="table-wrap">
@@ -580,6 +594,11 @@ export function Dashboard() {
               results={results}
               totals={activeTotals}
               logs={taskLogs}
+              onRubricsUpdated={(updatedTask, updatedResults) => {
+                setTasks((current) => current.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
+                setActiveTask((current) => (current?.id === updatedTask.id ? updatedTask : current));
+                setResults(updatedResults);
+              }}
             />
           ) : (
             <p className="muted">从任务列表选择一行查看结果。</p>
@@ -739,12 +758,23 @@ function ResultView({
   results,
   totals,
   logs,
+  onRubricsUpdated,
 }: {
   task: Task;
   results: ScoreResult[];
   totals: Array<{ url: string; total: number; max: number }>;
   logs: TaskLog[];
+  onRubricsUpdated: (task: Task, results: ScoreResult[]) => void;
 }) {
+  const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => rubric.description));
+  const [rubricBusy, setRubricBusy] = useState<number | null>(null);
+  const [rubricError, setRubricError] = useState("");
+
+  useEffect(() => {
+    setRubricDrafts(task.rubrics.map((rubric) => rubric.description));
+    setRubricError("");
+  }, [task.id, task.rubrics]);
+
   const rubricsCopyText = task.rubrics.map((rubric, index) => `${index + 1}. ${rubric.description}`).join("\n");
   const orderedResults = task.urls
     .map((url) => results.find((result) => result.url === url))
@@ -753,6 +783,97 @@ function ResultView({
   const scoreCopyText = JSON.stringify(orderedResults.map((result) => result.scores));
   const manualFailSummaries = task.mode === "manual" ? summarizeManualFailReasons(task, results) : [];
   const manualFailCopyText = manualFailSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n");
+
+  async function persistRubrics(nextDescriptions: string[], removedIndexes: number[] = []) {
+    const rubrics = nextDescriptions.map((description, index) => ({
+      id: `R${index + 1}`,
+      name: task.rubrics[index]?.name || `规则 ${index + 1}`,
+      description: description.trim(),
+      evidenceHints: task.rubrics[index]?.evidenceHints || [],
+    }));
+    const response = await fetch(`/api/tasks/${task.id}/rubrics`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rubrics, removedIndexes }),
+    });
+    const data = (await response.json()) as { task?: Task; results?: ScoreResult[]; error?: string };
+    if (!response.ok || !data.task || !data.results) throw new Error(data.error || "Rubrics 保存失败");
+    onRubricsUpdated(data.task, data.results);
+  }
+
+  async function saveRubric(index: number) {
+    const value = rubricDrafts[index]?.trim();
+    if (!value) {
+      setRubricError("Rubric 不能为空。");
+      return;
+    }
+    try {
+      setRubricBusy(index);
+      setRubricError("");
+      await persistRubrics(rubricDrafts);
+    } catch (error) {
+      setRubricError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRubricBusy(null);
+    }
+  }
+
+  async function deleteRubric(index: number) {
+    if (task.rubrics.length <= 1) {
+      setRubricError("至少保留 1 条 Rubric。");
+      return;
+    }
+    if (!window.confirm(`确认删除第 ${index + 1} 条 Rubric？对应打分和汇总也会同步删除。`)) return;
+    try {
+      setRubricBusy(index);
+      setRubricError("");
+      await persistRubrics(
+        rubricDrafts.filter((_item, itemIndex) => itemIndex !== index),
+        [index],
+      );
+    } catch (error) {
+      setRubricError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRubricBusy(null);
+    }
+  }
+
+  function renderRubricSection() {
+    return (
+      <section className="rubric-section">
+        <div className="copy-bar">
+          <div className="rubric-copy-with-warning">
+            <button className="small-button" onClick={() => void copyText(rubricsCopyText)}>
+              复制 Rubrics
+            </button>
+            <strong>修改后立即应用，请刷新检查页面</strong>
+          </div>
+          <span>Rubrics ({task.rubrics.length})</span>
+        </div>
+        <ol className="rubric-list editable-rubric-list">
+          {task.rubrics.map((rubric, index) => (
+            <li key={rubric.id}>
+              <input
+                value={rubricDrafts[index] ?? rubric.description}
+                onChange={(event) =>
+                  setRubricDrafts((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
+                }
+              />
+              <div className="rubric-edit-actions">
+                <button className="small-button" onClick={() => void saveRubric(index)} disabled={rubricBusy !== null}>
+                  保存
+                </button>
+                <button className="small-button danger-button" onClick={() => void deleteRubric(index)} disabled={rubricBusy !== null}>
+                  删除
+                </button>
+              </div>
+            </li>
+          ))}
+        </ol>
+        {rubricError ? <p className="rubric-edit-error">{rubricError}</p> : null}
+      </section>
+    );
+  }
 
   if (task.status === "error") {
     return (
@@ -766,21 +887,7 @@ function ResultView({
   if (task.mode === "manual" && task.rubrics.length > 0) {
     return (
       <div className="results-wrap">
-        <section className="rubric-section">
-          <div className="copy-bar">
-            <button className="small-button" onClick={() => void copyText(rubricsCopyText)}>
-              复制 Rubrics
-            </button>
-            <span>Rubrics ({task.rubrics.length})</span>
-          </div>
-          <ol className="rubric-list">
-            {task.rubrics.map((rubric) => (
-              <li key={rubric.id}>
-                <span>{rubric.description}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
+        {renderRubricSection()}
 
         <section className="score-section">
           <div className="copy-bar">
@@ -844,24 +951,7 @@ function ResultView({
 
   return (
     <div className="results-wrap">
-      <section className="rubric-section">
-        <div className="copy-bar">
-          <button
-            className="small-button"
-            onClick={() => void copyText(rubricsCopyText)}
-          >
-            复制 Rubrics
-          </button>
-          <span>Rubrics ({task.rubrics.length})</span>
-        </div>
-        <ol className="rubric-list">
-          {task.rubrics.map((rubric) => (
-            <li key={rubric.id}>
-              <span>{rubric.description}</span>
-            </li>
-          ))}
-        </ol>
-      </section>
+      {renderRubricSection()}
 
       <section className="score-section">
         <div className="copy-bar">
