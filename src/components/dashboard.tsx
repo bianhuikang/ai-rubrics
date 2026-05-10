@@ -98,6 +98,42 @@ export function Dashboard() {
     return () => window.clearInterval(timer);
   }, [activeTask?.id, activeTask?.mode, activeTask?.status]);
 
+  useEffect(() => {
+    if (!activeTask) return;
+
+    const refreshActiveTaskResults = () => {
+      void refreshAll({ keepSelection: true });
+      void loadResults(activeTask.id);
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== "manual-score-updated" || !event.newValue) return;
+      try {
+        const payload = JSON.parse(event.newValue) as { taskId?: string };
+        if (payload.taskId === activeTask.id) refreshActiveTaskResults();
+      } catch {
+        refreshActiveTaskResults();
+      }
+    };
+
+    const handleFocus = () => {
+      refreshActiveTaskResults();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshActiveTaskResults();
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeTask?.id]);
+
   const activeTotals = useMemo(() => {
     return results.map((result) => ({
       url: result.url,

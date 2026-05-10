@@ -366,13 +366,27 @@ select:focus {
   background: #edf5ff;
 }
 
+.task-table tbody tr.active-row {
+  background: #d7ebff;
+  box-shadow:
+    inset 6px 0 0 var(--primary),
+    inset 0 0 0 2px rgba(35, 100, 170, 0.55);
+}
+
+.task-table tbody tr.active-row td {
+  color: var(--primary-strong);
+  font-weight: 800;
+  border-top: 1px solid rgba(35, 100, 170, 0.28);
+  border-bottom-color: rgba(35, 100, 170, 0.28);
+}
+
 .task-table tbody tr.task-row-scored {
   background: #f0fbf6;
 }
 
 .task-table tbody tr.task-row-scored:hover,
 .task-table tbody tr.task-row-scored.active-row {
-  background: #dcf6ea;
+  background: #d7ebff;
 }
 
 .task-table tbody tr.task-row-scored td:first-child {
@@ -385,7 +399,7 @@ select:focus {
 
 .task-table tbody tr.task-row-error:hover,
 .task-table tbody tr.task-row-error.active-row {
-  background: #ffecef;
+  background: #d7ebff;
 }
 
 .task-table tbody tr.task-row-error td:first-child {

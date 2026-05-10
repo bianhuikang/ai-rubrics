@@ -77,6 +77,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       const data = (await response.json()) as { task: Task; results: ScoreResult[] };
       setTask(data.task);
       setResults(data.results);
+      notifyManualScoreUpdated(taskId, url);
       clearDraft(taskId, url);
       const nextPageUrl = findNextUrl(data.task.urls, url);
       if (nextPageUrl) {
@@ -356,6 +357,17 @@ function ensureReasonLength(value: string[] | undefined, count: number) {
 
 function clearDraft(taskId: string, url: string) {
   window.localStorage.removeItem(draftKey(taskId, url));
+}
+
+function notifyManualScoreUpdated(taskId: string, url: string) {
+  window.localStorage.setItem(
+    "manual-score-updated",
+    JSON.stringify({
+      taskId,
+      url,
+      updatedAt: Date.now(),
+    }),
+  );
 }
 
 function findNextUrl(urls: string[], currentUrl: string) {
