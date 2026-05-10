@@ -612,7 +612,7 @@ function ResultView({
 
         <section className="score-section">
           <div className="copy-bar">
-            <button className="small-button" onClick={() => void copyText(scoreCopyText)} disabled={!orderedResults.length}>
+            <button className="small-button copy-action-button" onClick={() => void copyText(scoreCopyText)} disabled={!orderedResults.length}>
               复制打分
             </button>
             <span>手动检查 URL ({orderedResults.length}/{task.urls.length})</span>
@@ -645,7 +645,7 @@ function ResultView({
         {manualFailSummaries.length ? (
           <section className="manual-reason-section">
             <div className="copy-bar">
-              <button className="small-button" onClick={() => void copyText(manualFailCopyText)}>
+              <button className="small-button copy-action-button" onClick={() => void copyText(manualFailCopyText)}>
                 复制原因
               </button>
               <span>不符合原因汇总</span>

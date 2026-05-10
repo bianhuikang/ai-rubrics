@@ -61,6 +61,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const currentRubric = task?.rubrics[answeredCount];
   const isComplete = Boolean(task?.rubrics.length && answeredCount >= task.rubrics.length);
   const nextUrl = task ? findNextUrl(task.urls, url) : null;
+  const sourceZipUrl = getSourceZipUrl(url);
 
   async function saveManualScore(nextScores: number[], nextReasons: string[], nextPageFailReason?: string) {
     setSaving(true);
@@ -200,7 +201,14 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     <main className="manual-check-page">
       <aside className={`manual-check-bar ${allDoneFlash ? "all-done-flash" : ""}`}>
         <div className="manual-check-meta">
-          <strong>手动检查</strong>
+          <div className="manual-meta-title">
+            <strong>手动检查</strong>
+            {sourceZipUrl ? (
+              <a className="manual-source-link" href={sourceZipUrl} download target="_blank" rel="noreferrer">
+                下载源码
+              </a>
+            ) : null}
+          </div>
           <span title={url}>{urlTail(url)}</span>
           <em>{scoreSummary}</em>
         </div>
@@ -354,6 +362,16 @@ function findNextUrl(urls: string[], currentUrl: string) {
   const currentIndex = urls.findIndex((item) => item === currentUrl);
   if (currentIndex < 0) return null;
   return urls[currentIndex + 1] ?? null;
+}
+
+function getSourceZipUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    parsed.pathname = parsed.pathname.replace(/index\.html$/i, "code_files.zip");
+    return parsed.pathname.endsWith("code_files.zip") ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function urlTail(url: string) {
