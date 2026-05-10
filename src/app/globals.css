@@ -822,6 +822,60 @@ summary {
   font-weight: 800;
 }
 
+.manual-score-dots {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 90;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  max-width: min(520px, 48vw);
+  transform: translateX(-50%);
+}
+
+.manual-score-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin: 0;
+  border-radius: 0;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.manual-score-dot.todo {
+  background: #e5ebf2;
+  color: var(--muted);
+}
+
+.manual-score-dot.pass {
+  border-color: var(--success);
+  background: var(--success);
+  color: #fff;
+}
+
+.manual-score-dot.fail {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.manual-score-dot.active {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px var(--primary);
+}
+
 .manual-source-link {
   width: fit-content;
   border: 1px solid var(--line);

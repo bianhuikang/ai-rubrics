@@ -20,6 +20,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const [scores, setScores] = useState<number[]>([]);
   const [reasons, setReasons] = useState<string[]>([]);
   const [answeredCount, setAnsweredCount] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [pendingFailIndex, setPendingFailIndex] = useState<number | null>(null);
   const [pendingPageFail, setPendingPageFail] = useState(false);
   const [failReason, setFailReason] = useState("");
@@ -42,24 +43,30 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       const resultData = (await resultsResponse.json()) as { results: ScoreResult[] };
       const existing = resultData.results.find((result) => result.url === url);
       const draft = loadDraft(taskId, url, nextTask.rubrics.length);
+      const nextScores = existing?.scores ?? draft?.scores ?? nextTask.rubrics.map(() => 0);
+      const nextReasons = ensureReasonLength(existing?.reasons ?? draft?.reasons, nextTask.rubrics.length);
+      const nextAnsweredCount = existing ? nextTask.rubrics.length : draft?.answeredCount ?? 0;
 
       setTask(nextTask);
       setResults(resultData.results);
-      setScores(existing?.scores ?? draft?.scores ?? nextTask.rubrics.map(() => 0));
-      setReasons(ensureReasonLength(existing?.reasons ?? draft?.reasons, nextTask.rubrics.length));
-      setAnsweredCount(existing ? nextTask.rubrics.length : draft?.answeredCount ?? 0);
+      setScores(nextScores);
+      setReasons(nextReasons);
+      setAnsweredCount(nextAnsweredCount);
+      setCurrentIndex(Math.min(nextAnsweredCount, nextTask.rubrics.length));
       setNotice(existing ? "已完成" : draft ? "已恢复本地进度" : "");
     }
 
     load().catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
   }, [taskId, url]);
 
-  const scoreSummary = useMemo(() => {
-    return `进度 ${answeredCount}/${scores.length}`;
-  }, [answeredCount, scores.length]);
+  const completedCount = useMemo(() => reasons.filter((reason) => reason.trim()).length, [reasons]);
 
-  const currentRubric = task?.rubrics[answeredCount];
-  const isComplete = Boolean(task?.rubrics.length && answeredCount >= task.rubrics.length);
+  const scoreSummary = useMemo(() => {
+    return `进度 ${completedCount}/${scores.length}`;
+  }, [completedCount, scores.length]);
+
+  const currentRubric = task?.rubrics[currentIndex];
+  const isComplete = Boolean(task?.rubrics.length && completedCount >= task.rubrics.length && currentIndex >= task.rubrics.length);
   const nextUrl = task ? findNextUrl(task.urls, url) : null;
   const sourceZipUrl = getSourceZipUrl(url);
 
@@ -98,22 +105,24 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   }
 
   function commitAnswer(score: number, reason: string) {
-    if (!task || answeredCount >= task.rubrics.length) return;
+    if (!task || currentIndex >= task.rubrics.length) return;
 
-    const nextScores = scores.map((current, index) => (index === answeredCount ? score : current));
-    const nextReasons = reasons.map((current, index) => (index === answeredCount ? reason : current));
-    const nextAnsweredCount = answeredCount + 1;
+    const nextScores = scores.map((current, index) => (index === currentIndex ? score : current));
+    const nextReasons = reasons.map((current, index) => (index === currentIndex ? reason : current));
+    const nextAnsweredCount = Math.max(answeredCount, firstUnansweredIndex(nextReasons, task.rubrics.length));
+    const nextIndex = firstUnansweredIndex(nextReasons, task.rubrics.length);
 
     setLastChoice(score);
     setScores(nextScores);
     setReasons(nextReasons);
     setAnsweredCount(nextAnsweredCount);
+    setCurrentIndex(nextIndex);
     setPendingFailIndex(null);
     setPendingPageFail(false);
     setFailReason("");
     setPageFailReason("");
 
-    if (nextAnsweredCount >= task.rubrics.length) {
+    if (nextIndex >= task.rubrics.length) {
       void saveManualScore(nextScores, nextReasons);
       return;
     }
@@ -130,8 +139,8 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   function answerFail() {
     if (!task) return;
     setLastChoice(0);
-    setPendingFailIndex(answeredCount);
-    setFailReason(reasons[answeredCount] || "");
+    setPendingFailIndex(currentIndex);
+    setFailReason(reasons[currentIndex] || "");
     setNotice("请填写不符合理由");
   }
 
@@ -141,7 +150,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       setNotice("请填写不符合理由");
       return;
     }
-    if (pendingFailIndex !== answeredCount) return;
+    if (pendingFailIndex !== currentIndex) return;
     commitAnswer(0, reason);
   }
 
@@ -166,6 +175,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setScores(nextScores);
     setReasons(nextReasons);
     setAnsweredCount(task.rubrics.length);
+    setCurrentIndex(task.rubrics.length);
     setPendingFailIndex(null);
     setPendingPageFail(false);
     setPageFailReason("");
@@ -181,12 +191,24 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setNotice("");
   }
 
+  function jumpToRubric(index: number) {
+    if (!task || index < 0 || index >= task.rubrics.length) return;
+    setCurrentIndex(index);
+    setPendingFailIndex(null);
+    setPendingPageFail(false);
+    setFailReason("");
+    setPageFailReason("");
+    setLastChoice(null);
+    setNotice(`已回到第 ${index + 1} 条`);
+  }
+
   function restartCheck() {
     if (!task) return;
     clearDraft(taskId, url);
     setScores(task.rubrics.map(() => 0));
     setReasons(task.rubrics.map(() => ""));
     setAnsweredCount(0);
+    setCurrentIndex(0);
     setPendingFailIndex(null);
     setPendingPageFail(false);
     setFailReason("");
@@ -212,17 +234,42 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
           </div>
           <span title={url}>{urlTail(url)}</span>
           <em>{scoreSummary}</em>
+          {task?.rubrics.length ? (
+            <div className="manual-score-dots" aria-label="当前页面评分进度">
+              {task.rubrics.map((rubric, index) => {
+                const done = Boolean(reasons[index]?.trim());
+                const score = scores[index] ? 1 : 0;
+                return (
+                  <button
+                    key={rubric.id}
+                    className={[
+                      "manual-score-dot",
+                      done ? (score ? "pass" : "fail") : "todo",
+                      currentIndex === index ? "active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onClick={() => jumpToRubric(index)}
+                    title={`第 ${index + 1} 条：${done ? score : "未检查"}`}
+                    type="button"
+                  >
+                    {done ? score : ""}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
         <div className="manual-rubrics">
           {currentRubric ? (
-            <div className={`manual-rubric-focus ${pendingFailIndex === answeredCount || pendingPageFail ? "with-reason" : ""}`}>
+            <div className={`manual-rubric-focus ${pendingFailIndex === currentIndex || pendingPageFail ? "with-reason" : ""}`}>
               <p>
                 {pendingPageFail ? (
                   "当前页面全部不符合"
                 ) : (
                   <>
-                    <strong>{answeredCount + 1}.</strong> {currentRubric.description}
+                    <strong>{currentIndex + 1}.</strong> {currentRubric.description}
                   </>
                 )}
               </p>
@@ -244,7 +291,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                     取消
                   </button>
                 </div>
-              ) : pendingFailIndex === answeredCount ? (
+              ) : pendingFailIndex === currentIndex ? (
                 <div className="manual-fail-reason">
                   <input
                     autoFocus
@@ -353,6 +400,11 @@ function saveDraft(taskId: string, url: string, draft: ManualDraft) {
 
 function ensureReasonLength(value: string[] | undefined, count: number) {
   return Array.from({ length: count }, (_item, index) => value?.[index] ?? "");
+}
+
+function firstUnansweredIndex(reasons: string[], count: number) {
+  const index = reasons.findIndex((reason, reasonIndex) => reasonIndex < count && !reason.trim());
+  return index >= 0 ? index : count;
 }
 
 function clearDraft(taskId: string, url: string) {
