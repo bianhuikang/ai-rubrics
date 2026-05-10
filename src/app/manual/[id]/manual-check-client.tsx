@@ -25,6 +25,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const [failReason, setFailReason] = useState("");
   const [pageFailReason, setPageFailReason] = useState("");
   const [lastChoice, setLastChoice] = useState<number | null>(null);
+  const [allDoneFlash, setAllDoneFlash] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -83,7 +84,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
           window.location.href = `/manual/${encodeURIComponent(taskId)}?url=${encodeURIComponent(nextPageUrl)}`;
         }, 350);
       } else {
-        setNotice("已完成并保存，全部检查完成");
+        setNotice("恭喜！所有页面检查完成");
+        setAllDoneFlash(true);
+        window.setTimeout(() => setAllDoneFlash(false), 1800);
       }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
@@ -195,7 +198,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
 
   return (
     <main className="manual-check-page">
-      <aside className="manual-check-bar">
+      <aside className={`manual-check-bar ${allDoneFlash ? "all-done-flash" : ""}`}>
         <div className="manual-check-meta">
           <strong>手动检查</strong>
           <span title={url}>{urlTail(url)}</span>
@@ -306,6 +309,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
           <span>{notice}</span>
           <span>{results.length ? `已完成页面检查：${results.length}/${task?.urls.length ?? 0}` : ""}</span>
         </div>
+        {allDoneFlash ? <div className="manual-complete-toast">恭喜！所有页面检查完成</div> : null}
       </aside>
 
       <iframe className="manual-target-frame" src={url} title="manual target page" />
