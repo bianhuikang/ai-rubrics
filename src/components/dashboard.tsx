@@ -580,7 +580,7 @@ function ResultView({
   const allScoresReady = task.status === "scored" && orderedResults.length >= task.urls.length;
   const scoreCopyText = JSON.stringify(orderedResults.map((result) => result.scores));
   const manualFailSummaries = task.mode === "manual" ? summarizeManualFailReasons(task, results) : [];
-  const manualFailCopyText = manualFailSummaries.join("\n");
+  const manualFailCopyText = manualFailSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n");
 
   if (task.status === "error") {
     return (
@@ -852,6 +852,45 @@ function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
   const summaries: string[] = [];
   const resultByUrl = new Map(results.map((result) => [result.url, result]));
 
+  task.urls.forEach((url, urlIndex) => {
+    const result = resultByUrl.get(url);
+    if (!result) return;
+
+    task.rubrics.forEach((_rubric, rubricIndex) => {
+      if (result.scores[rubricIndex] !== 0) return;
+      const reason = normalizeManualFailReason(result.reasons[rubricIndex]);
+      summaries.push(`第${urlIndex + 1}个页面->第${rubricIndex + 1}条rubrics->${reason}`);
+    });
+  });
+
+  return summaries;
+}
+
+function normalizeManualFailReason(reason: string | undefined) {
+  const value = reason?.trim();
+  if (!value || value === "人工未标记符合") return "未填写原因";
+  return value;
+}
+
+function taskProgress(task: Task) {
+  if (task.status === "scored") return 100;
+  if (task.status === "error") return Math.min(99, Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 100));
+  if (task.status === "generating-rubrics") return 10;
+  if (task.status === "rubrics-ready") {
+    return task.mode === "manual" ? Math.min(99, 20 + Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 75)) : 20;
+  }
+  if (task.status === "scoring") {
+    return Math.min(99, 15 + Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 80));
+  }
+  if (task.status === "queued") return 2;
+  return 0;
+}
+
+function taskProgressOldUnused(task: Task) {
+  task;
+  return 0;
+}
+/*
   task.rubrics.forEach((_rubric, rubricIndex) => {
     const groups = new Map<string, number[]>();
     task.urls.forEach((url, urlIndex) => {
@@ -896,6 +935,8 @@ function taskProgress(task: Task) {
   if (task.status === "queued") return 2;
   return 0;
 }
+
+*/
 
 function statusLabel(status: TaskStatus) {
   const labels: Record<TaskStatus, string> = {

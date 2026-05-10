@@ -120,12 +120,6 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
 
   function answerFail() {
     if (!task) return;
-    const reusableReason = findReusableFailReason(results, answeredCount);
-    if (reusableReason) {
-      commitAnswer(0, reusableReason);
-      setNotice("已复用该 rubric 的不符合理由");
-      return;
-    }
     setLastChoice(0);
     setPendingFailIndex(answeredCount);
     setFailReason(reasons[answeredCount] || "");
@@ -288,15 +282,6 @@ function ensureReasonLength(value: string[] | undefined, count: number) {
 
 function clearDraft(taskId: string, url: string) {
   window.localStorage.removeItem(draftKey(taskId, url));
-}
-
-function findReusableFailReason(results: ScoreResult[], rubricIndex: number) {
-  for (const result of results) {
-    if (result.scores[rubricIndex] !== 0) continue;
-    const reason = result.reasons[rubricIndex]?.trim();
-    if (reason && reason !== "人工未标记符合") return reason;
-  }
-  return "";
 }
 
 function findNextUrl(urls: string[], currentUrl: string) {
