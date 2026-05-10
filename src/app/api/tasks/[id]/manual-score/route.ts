@@ -8,6 +8,7 @@ const manualScoreSchema = z.object({
   url: z.string().url(),
   scores: z.array(z.union([z.literal(0), z.literal(1)])).min(1),
   reasons: z.array(z.string()).optional(),
+  pageFailReason: z.string().optional(),
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -35,7 +36,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     evidence: {
       ...makeEmptyEvidence(input.url),
       errors: [],
-      technology: { mode: "manual" },
+      technology: { mode: "manual", pageFailReason: input.pageFailReason?.trim() || undefined },
     },
     rawResponse: "manual",
   });

@@ -604,7 +604,7 @@ function ResultView({
           <ol className="rubric-list">
             {task.rubrics.map((rubric) => (
               <li key={rubric.id}>
-                <span>{rubric.id}. {rubric.description}</span>
+                <span>{rubric.description}</span>
               </li>
             ))}
           </ol>
@@ -685,7 +685,7 @@ function ResultView({
         <ol className="rubric-list">
           {task.rubrics.map((rubric) => (
             <li key={rubric.id}>
-              <span>{rubric.id}. {rubric.description}</span>
+              <span>{rubric.description}</span>
             </li>
           ))}
         </ol>
@@ -855,6 +855,11 @@ function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
   task.urls.forEach((url, urlIndex) => {
     const result = resultByUrl.get(url);
     if (!result) return;
+    const pageFailReason = getPageFailReason(result);
+    if (pageFailReason) {
+      summaries.push(`第${urlIndex + 1}个页面->${pageFailReason}`);
+      return;
+    }
 
     task.rubrics.forEach((_rubric, rubricIndex) => {
       if (result.scores[rubricIndex] !== 0) return;
@@ -864,6 +869,13 @@ function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
   });
 
   return summaries;
+}
+
+function getPageFailReason(result: ScoreResult) {
+  const technology = result.evidence?.technology;
+  if (!technology || typeof technology !== "object") return "";
+  const reason = (technology as { pageFailReason?: unknown }).pageFailReason;
+  return typeof reason === "string" ? reason.trim() : "";
 }
 
 function normalizeManualFailReason(reason: string | undefined) {

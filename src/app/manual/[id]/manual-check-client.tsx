@@ -21,7 +21,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const [reasons, setReasons] = useState<string[]>([]);
   const [answeredCount, setAnsweredCount] = useState(0);
   const [pendingFailIndex, setPendingFailIndex] = useState<number | null>(null);
+  const [pendingPageFail, setPendingPageFail] = useState(false);
   const [failReason, setFailReason] = useState("");
+  const [pageFailReason, setPageFailReason] = useState("");
   const [lastChoice, setLastChoice] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
@@ -59,14 +61,14 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const isComplete = Boolean(task?.rubrics.length && answeredCount >= task.rubrics.length);
   const nextUrl = task ? findNextUrl(task.urls, url) : null;
 
-  async function saveManualScore(nextScores: number[], nextReasons: string[]) {
+  async function saveManualScore(nextScores: number[], nextReasons: string[], nextPageFailReason?: string) {
     setSaving(true);
     setNotice("保存中...");
     try {
       const response = await fetch(`/api/tasks/${taskId}/manual-score`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, scores: nextScores, reasons: nextReasons }),
+        body: JSON.stringify({ url, scores: nextScores, reasons: nextReasons, pageFailReason: nextPageFailReason }),
       });
       if (!response.ok) throw new Error(await response.text());
 
@@ -102,7 +104,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setReasons(nextReasons);
     setAnsweredCount(nextAnsweredCount);
     setPendingFailIndex(null);
+    setPendingPageFail(false);
     setFailReason("");
+    setPageFailReason("");
 
     if (nextAnsweredCount >= task.rubrics.length) {
       void saveManualScore(nextScores, nextReasons);
@@ -136,9 +140,38 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     commitAnswer(0, reason);
   }
 
+  function answerAllFail() {
+    if (!task) return;
+    setLastChoice(0);
+    setPendingFailIndex(null);
+    setPendingPageFail(true);
+    setPageFailReason("");
+    setNotice("请填写页面全不符合理由");
+  }
+
+  function submitPageFailReason() {
+    if (!task) return;
+    const reason = pageFailReason.trim();
+    if (!reason) {
+      setNotice("请填写页面全不符合理由");
+      return;
+    }
+    const nextScores = task.rubrics.map(() => 0);
+    const nextReasons = task.rubrics.map(() => reason);
+    setScores(nextScores);
+    setReasons(nextReasons);
+    setAnsweredCount(task.rubrics.length);
+    setPendingFailIndex(null);
+    setPendingPageFail(false);
+    setPageFailReason("");
+    void saveManualScore(nextScores, nextReasons, reason);
+  }
+
   function cancelFailReason() {
     setPendingFailIndex(null);
+    setPendingPageFail(false);
     setFailReason("");
+    setPageFailReason("");
     setLastChoice(null);
     setNotice("");
   }
@@ -150,7 +183,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setReasons(task.rubrics.map(() => ""));
     setAnsweredCount(0);
     setPendingFailIndex(null);
+    setPendingPageFail(false);
     setFailReason("");
+    setPageFailReason("");
     setNotice("");
   }
 
@@ -169,11 +204,35 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
 
         <div className="manual-rubrics">
           {currentRubric ? (
-            <div className={`manual-rubric-focus ${pendingFailIndex === answeredCount ? "with-reason" : ""}`}>
+            <div className={`manual-rubric-focus ${pendingFailIndex === answeredCount || pendingPageFail ? "with-reason" : ""}`}>
               <p>
-                <strong>{answeredCount + 1}.</strong> {currentRubric.description}
+                {pendingPageFail ? (
+                  "当前页面全部不符合"
+                ) : (
+                  <>
+                    <strong>{answeredCount + 1}.</strong> {currentRubric.description}
+                  </>
+                )}
               </p>
-              {pendingFailIndex === answeredCount ? (
+              {pendingPageFail ? (
+                <div className="manual-fail-reason">
+                  <input
+                    autoFocus
+                    value={pageFailReason}
+                    onChange={(event) => setPageFailReason(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") submitPageFailReason();
+                    }}
+                    placeholder="页面全不符合理由"
+                  />
+                  <button className="manual-rubric-toggle fail-choice" onClick={submitPageFailReason} disabled={saving} type="button">
+                    确认
+                  </button>
+                  <button className="manual-rubric-toggle" onClick={cancelFailReason} disabled={saving} type="button">
+                    取消
+                  </button>
+                </div>
+              ) : pendingFailIndex === answeredCount ? (
                 <div className="manual-fail-reason">
                   <input
                     autoFocus
@@ -208,6 +267,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                     type="button"
                   >
                     符合
+                  </button>
+                  <button className="manual-rubric-toggle page-fail-choice" onClick={answerAllFail} disabled={saving} type="button">
+                    全不符合
                   </button>
                 </div>
               )}

@@ -679,7 +679,7 @@ summary {
   top: 0;
   z-index: 50;
   display: grid;
-  grid-template-columns: minmax(170px, 240px) minmax(0, 1fr) minmax(150px, auto);
+  grid-template-columns: 220px minmax(0, 1fr) 220px;
   gap: 8px;
   align-items: start;
   max-height: 110px;
@@ -717,14 +717,14 @@ summary {
 
 .manual-rubric-focus {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 250px;
   gap: 10px;
   align-items: center;
   min-height: 48px;
 }
 
 .manual-rubric-focus.with-reason {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.7fr);
+  grid-template-columns: minmax(0, 1fr) 360px;
 }
 
 .manual-rubric-focus p {
@@ -749,12 +749,15 @@ summary {
 .manual-answer-buttons {
   display: flex;
   gap: 8px;
+  justify-content: flex-end;
+  width: 250px;
 }
 
 .manual-fail-reason {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
+  width: 360px;
 }
 
 .manual-fail-reason input {
@@ -786,6 +789,20 @@ summary {
   font-weight: 700;
 }
 
+.manual-rubric-toggle.page-fail-choice {
+  border-color: #c8d0da;
+  background: #f2f4f7;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.manual-rubric-toggle.page-fail-choice:hover,
+.manual-rubric-toggle.page-fail-choice:focus-visible {
+  border-color: #9aa6b2;
+  background: #e8ecf1;
+  color: var(--text);
+}
+
 .manual-rubric-toggle.fail-choice:hover,
 .manual-rubric-toggle.fail-choice:focus-visible,
 .manual-rubric-toggle.fail-choice.just-picked {
@@ -809,8 +826,16 @@ summary {
   align-self: center;
   justify-content: flex-end;
   gap: 6px;
+  width: 220px;
+  min-width: 220px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.manual-check-actions span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .manual-target-frame {
