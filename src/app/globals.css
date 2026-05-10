@@ -1012,6 +1012,62 @@ pre {
   box-shadow: 0 22px 70px rgba(15, 23, 42, 0.24);
 }
 
+.rubrics-review-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(1180px, 96vw);
+  height: min(820px, 92vh);
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 16px;
+  box-shadow: 0 22px 70px rgba(15, 23, 42, 0.24);
+}
+
+.rubrics-review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+}
+
+.rubrics-review-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.review-text,
+.review-rubrics {
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  background: #fbfcfd;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.review-text {
+  padding: 12px;
+}
+
+.review-rubrics {
+  padding: 12px 18px 14px;
+  list-style: none;
+}
+
+.review-rubrics li {
+  margin: 0 0 8px;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1081,6 +1137,10 @@ pre {
   }
 
   .manual-check-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .rubrics-review-grid {
     grid-template-columns: 1fr;
   }
 

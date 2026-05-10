@@ -51,6 +51,7 @@ export function Dashboard() {
   const [testResult, setTestResult] = useState<Notice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(new Set());
+  const [rubricsReviewOpen, setRubricsReviewOpen] = useState(false);
   const [taskId, setTaskId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [urlsText, setUrlsText] = useState("");
@@ -521,6 +522,9 @@ export function Dashboard() {
             </div>
             {activeTask ? (
               <div className="actions">
+                <button onClick={() => setRubricsReviewOpen(true)} disabled={!activeTask.rubrics.length}>
+                  检查 Rubrics
+                </button>
                 <button onClick={rerunActiveTask} disabled={runningTaskIds.has(activeTask.id)}>
                   重跑
                 </button>
@@ -546,6 +550,38 @@ export function Dashboard() {
           )}
         </section>
       </section>
+
+      {rubricsReviewOpen && activeTask ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setRubricsReviewOpen(false)}>
+          <section className="rubrics-review-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-header">
+              <div>
+                <h2>检查 Rubrics</h2>
+                <p>{activeTask.id}</p>
+              </div>
+              <button onClick={() => setRubricsReviewOpen(false)}>关闭</button>
+            </div>
+            <div className="rubrics-review-grid">
+              <section className="rubrics-review-pane">
+                <div className="copy-bar">
+                  <span>Prompt</span>
+                </div>
+                <pre className="review-text">{activeTask.prompt || "未填写 Prompt"}</pre>
+              </section>
+              <section className="rubrics-review-pane">
+                <div className="copy-bar">
+                  <span>Rubrics ({activeTask.rubrics.length})</span>
+                </div>
+                <ul className="review-rubrics">
+                  {activeTask.rubrics.map((rubric) => (
+                    <li key={rubric.id}>{rubric.description}</li>
+                  ))}
+                </ul>
+              </section>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {settingsOpen ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
