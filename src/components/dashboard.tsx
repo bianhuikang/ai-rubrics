@@ -27,6 +27,13 @@ type SettingsResponse = {
   manualCheckMode: boolean;
 };
 
+type ParsedCaseRow = {
+  id: string;
+  prompt: string;
+  urlsText: string;
+  rubricsText: string;
+};
+
 const runningStatuses: TaskStatus[] = ["queued", "generating-rubrics", "scoring"];
 
 export function Dashboard() {
@@ -239,6 +246,94 @@ export function Dashboard() {
     });
   }
 
+  async function parseClipboardCase() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const parsedRows = parseCaseRows(text);
+      if (!parsedRows.length) {
+        setNotice({ kind: "error", text: "没有识别到表格行，请复制包含任务ID、Prompt、URL数组、Rubrics的行。" });
+        return;
+      }
+      if (parsedRows.length === 1) {
+        applyPastedCase(parsedRows[0]);
+        return;
+      }
+      await createParsedCaseTasks(parsedRows);
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  function applyPastedCase(parsed: ParsedCaseRow) {
+    setTaskId(parsed.id);
+    setPrompt(parsed.prompt);
+    setUrlsText(parsed.urlsText);
+    setRubricsText(parsed.rubricsText);
+    setNotice({ kind: "success", text: "已解析到表单。" });
+  }
+
+  async function createParsedCaseTasks(parsedRows: ParsedCaseRow[]) {
+    try {
+      setBusy("batch-create");
+      const existingIds = new Set(tasks.map((task) => task.id));
+      const seenIds = new Set<string>();
+      const uniqueRows = parsedRows.filter((row) => {
+        const id = row.id.trim();
+        if (!id || existingIds.has(id) || seenIds.has(id)) return false;
+        seenIds.add(id);
+        return true;
+      });
+      const skippedCount = parsedRows.length - uniqueRows.length;
+      if (!uniqueRows.length) {
+        setNotice({ kind: "info", text: `没有创建新任务，已跳过 ${skippedCount} 个重复任务 ID。` });
+        return;
+      }
+
+      setNotice({ kind: "info", text: `正在批量创建 ${uniqueRows.length} 个任务${skippedCount ? `，跳过 ${skippedCount} 个重复ID` : ""}...` });
+      const createdTasks: Task[] = [];
+      const errors: string[] = [];
+      for (const parsed of uniqueRows) {
+        try {
+          const response = await fetch("/api/tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: parsed.id || undefined,
+              prompt: parsed.prompt,
+              urls: parseUrls(parsed.urlsText),
+              rubrics: parseRubricsInput(parsed.rubricsText),
+              mode: manualMode ? "manual" : "auto",
+            }),
+          });
+          if (!response.ok) throw new Error(await response.text());
+          const task = (await response.json()) as Task;
+          createdTasks.push(task);
+        } catch (error) {
+          errors.push(`${parsed.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      if (createdTasks.length) {
+        setTasks((current) => [...createdTasks, ...current]);
+        setActiveTask(createdTasks[0]);
+        setResults([]);
+        setTaskLogs([]);
+        createdTasks.forEach((task) => void runTask(task.id));
+      }
+
+      if (errors.length) {
+        setNotice({
+          kind: createdTasks.length ? "info" : "error",
+          text: `已创建 ${createdTasks.length} 个，跳过 ${skippedCount} 个重复ID，失败 ${errors.length} 个：${errors.slice(0, 2).join("；")}`,
+        });
+      } else {
+        setNotice({ kind: "success", text: `已批量创建 ${createdTasks.length} 个任务${skippedCount ? `，跳过 ${skippedCount} 个重复ID` : ""}。` });
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runTask(id: string) {
     setRunningTaskIds((current) => new Set(current).add(id));
     try {
@@ -305,9 +400,14 @@ export function Dashboard() {
         <section className="compact-panel create-panel">
           <div className="panel-header">
             <h2>新建任务</h2>
-            <button className="primary" onClick={createTask} disabled={Boolean(busy)}>
-              创建并执行
-            </button>
+            <div className="actions">
+              <button onClick={parseClipboardCase} disabled={Boolean(busy)}>
+                解析剪贴板
+              </button>
+              <button className="primary" onClick={createTask} disabled={Boolean(busy)}>
+                创建并执行
+              </button>
+            </div>
           </div>
           <label>
             任务 ID
@@ -846,6 +946,87 @@ function parseRubricsInput(value: string): Rubric[] {
     description,
     evidenceHints: [],
   }));
+}
+
+function parseCaseRows(value: string): ParsedCaseRow[] {
+  const text = value.trim();
+  if (!text) return [];
+
+  return splitCaseRows(text)
+    .map(parseCaseRow)
+    .filter((row): row is ParsedCaseRow => Boolean(row));
+}
+
+function splitCaseRows(value: string) {
+  const text = value.replace(/\r\n/g, "\n").trim();
+  const rowStarts = Array.from(text.matchAll(/(^|\n)([A-Za-z0-9][A-Za-z0-9_-]*)\t/g)).map((match) => ({
+    index: (match.index ?? 0) + (match[1] ? match[1].length : 0),
+  }));
+
+  if (rowStarts.length <= 1) return [text];
+
+  return rowStarts
+    .map((start, index) => {
+      const next = rowStarts[index + 1]?.index ?? text.length;
+      return text.slice(start.index, next).trim();
+    })
+    .filter(Boolean);
+}
+
+function parseCaseRow(value: string): ParsedCaseRow | null {
+  const text = value.trim();
+  if (!text) return null;
+
+  const cells = text
+    .split("\t")
+    .map(normalizeCaseCell)
+    .filter(Boolean);
+  const urlCellIndex = cells.findIndex((cell) => /^["']?\s*\[/.test(cell) && /https?:\/\//i.test(cell));
+  if (cells.length < 3 || urlCellIndex < 1) return null;
+
+  const id = cells[0];
+  const prompt = cells.slice(1, urlCellIndex).join("\n\n").trim();
+  const urlsText = cells[urlCellIndex];
+  const rubricsSource = cells
+    .slice(urlCellIndex + 1)
+    .reverse()
+    .find((cell) => /\d+\s*[.、]|rubrics|页面|功能|支持|提供|使用|展示|验证|点击/i.test(cell));
+
+  if (!id || !prompt || !urlsText || !rubricsSource) return null;
+
+  try {
+    parseUrls(urlsText);
+  } catch {
+    return null;
+  }
+
+  return {
+    id,
+    prompt,
+    urlsText,
+    rubricsText: normalizeCaseRubricsText(rubricsSource),
+  };
+}
+
+function normalizeCaseCell(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/""/g, '"').trim();
+  }
+  return trimmed;
+}
+
+function normalizeCaseRubricsText(value: string) {
+  const lines = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length > 1) return lines.join("\n");
+
+  const matched = value.match(/\d+\s*[.、][\s\S]*?(?=\s+\d+\s*[.、]|$)/g);
+  return (matched?.length ? matched : lines).map((line) => line.trim()).filter(Boolean).join("\n");
 }
 
 function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
