@@ -448,6 +448,26 @@ select:focus {
   border-left: 4px solid var(--danger);
 }
 
+.task-table tbody tr.task-row-rubrics-modified,
+.task-table tbody tr.task-row-rubrics-modified:hover,
+.task-table tbody tr.task-row-rubrics-modified.active-row {
+  background: #f1e0c8;
+}
+
+.task-table tbody tr.task-row-rubrics-modified td {
+  border-bottom-color: #d2aa74;
+}
+
+.task-table tbody tr.task-row-rubrics-modified td:first-child {
+  border-left: 4px solid #9a5f22;
+}
+
+.task-table tbody tr.task-row-rubrics-modified.active-row {
+  box-shadow:
+    inset 6px 0 0 #9a5f22,
+    inset 0 0 0 2px rgba(154, 95, 34, 0.5);
+}
+
 .mono {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -490,6 +510,13 @@ select:focus {
   align-items: center;
   gap: 8px;
   min-width: 120px;
+}
+
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .progress-track {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteResultForTaskUrl, getTask, listResults, makeEmptyEvidence, saveResult, updateTask } from "@/lib/db";
+import { deleteManualDraft, deleteResultForTaskUrl, getTask, listResults, makeEmptyEvidence, saveResult, updateTask } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -40,6 +40,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     },
     rawResponse: "manual",
   });
+  deleteManualDraft(id, input.url);
 
   const results = listResults(id);
   const scoredUrls = new Set(results.map((result) => result.url));

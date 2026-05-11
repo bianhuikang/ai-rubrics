@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getTask, updateTask } from "@/lib/db";
+import { deleteTask, getTask, updateTask } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -33,5 +33,22 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const task = getTask(id);
   if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
   const patch = updateSchema.parse(await request.json());
-  return NextResponse.json(updateTask(id, patch.rubrics ? { ...patch, rubricsSource: "user" } : patch));
+  const rubricsChanged = patch.rubrics ? JSON.stringify(patch.rubrics) !== JSON.stringify(task.rubrics) : false;
+  return NextResponse.json(
+    updateTask(
+      id,
+      patch.rubrics
+        ? { ...patch, rubricsSource: "user", rubricsModified: task.rubricsModified || rubricsChanged }
+        : patch,
+    ),
+  );
+}
+
+export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const task = getTask(id);
+  if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
+
+  deleteTask(id);
+  return NextResponse.json({ ok: true });
 }

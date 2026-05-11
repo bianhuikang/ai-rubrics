@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getSettings, getTask, listResults, updateResultScoresAndReasons, updateTask } from "@/lib/db";
+import { getSettings, getTask, listResults, migrateManualDraftsAfterRubricRemoval, updateResultScoresAndReasons, updateTask } from "@/lib/db";
 import { generateRubrics } from "@/lib/llm";
 import { logRubrics, logTaskStep } from "@/lib/server-log";
 
@@ -55,6 +55,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       description: rubric.description.trim(),
       evidenceHints: rubric.evidenceHints || [],
     }));
+    const rubricsChanged = JSON.stringify(normalizedRubrics) !== JSON.stringify(task.rubrics);
 
     const removedIndexes = Array.from(new Set(input.removedIndexes)).sort((a, b) => b - a);
     if (removedIndexes.length) {
@@ -63,11 +64,13 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         const nextReasons = result.reasons.filter((_reason, index) => !removedIndexes.includes(index));
         updateResultScoresAndReasons(result.id, nextScores, nextReasons);
       }
+      migrateManualDraftsAfterRubricRemoval(id, removedIndexes, normalizedRubrics.length);
     }
 
     const updated = updateTask(id, {
       rubrics: normalizedRubrics,
       rubricsSource: task.rubricsSource === "none" ? "user" : task.rubricsSource,
+      rubricsModified: task.rubricsModified || rubricsChanged,
       error: undefined,
     });
     return NextResponse.json({ task: updated, results: listResults(id) });

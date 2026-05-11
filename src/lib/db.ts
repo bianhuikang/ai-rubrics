@@ -17,6 +17,16 @@ const EMPTY_MODEL_CONFIG = {
   extraRequestParams: "{}",
 };
 
+export type ManualDraftRecord = {
+  taskId: string;
+  url: string;
+  scores: number[];
+  reasons: string[];
+  answeredCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 let db: Database.Database | undefined;
 
 function now() {
@@ -40,6 +50,7 @@ export function getDb() {
   if (!db) {
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
     db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -61,6 +72,7 @@ export function getDb() {
         urls TEXT NOT NULL,
         rubrics TEXT NOT NULL,
         rubricsSource TEXT NOT NULL DEFAULT 'none',
+        rubricsModified INTEGER NOT NULL DEFAULT 0,
         mode TEXT NOT NULL DEFAULT 'manual',
         status TEXT NOT NULL,
         error TEXT,
@@ -86,6 +98,18 @@ export function getDb() {
         message TEXT NOT NULL,
         extra TEXT,
         createdAt TEXT NOT NULL,
+        FOREIGN KEY(taskId) REFERENCES tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS manual_drafts (
+        taskId TEXT NOT NULL,
+        url TEXT NOT NULL,
+        scores TEXT NOT NULL,
+        reasons TEXT NOT NULL,
+        answeredCount INTEGER NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        PRIMARY KEY (taskId, url),
         FOREIGN KEY(taskId) REFERENCES tasks(id) ON DELETE CASCADE
       );
 
@@ -121,6 +145,9 @@ export function getDb() {
     }
     if (!taskColumns.some((column) => column.name === "mode")) {
       db.exec("ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'manual'");
+    }
+    if (!taskColumns.some((column) => column.name === "rubricsModified")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN rubricsModified INTEGER NOT NULL DEFAULT 0");
     }
 
     const existing = db.prepare("SELECT id FROM settings WHERE id = 1").get();
@@ -452,7 +479,7 @@ export function createTask(input: { id?: string; name?: string; prompt: string; 
 
 export function updateTask(
   id: string,
-  patch: Partial<Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "rubricsSource" | "mode" | "error">> & { status?: TaskStatus },
+  patch: Partial<Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "rubricsSource" | "rubricsModified" | "mode" | "error">> & { status?: TaskStatus },
 ): Task {
   const task = getTask(id);
   if (!task) throw new Error("Task not found");
@@ -460,7 +487,7 @@ export function updateTask(
   getDb()
     .prepare(`
       UPDATE tasks
-      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, mode = ?, status = ?, error = ?, updatedAt = ?
+      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, rubricsModified = ?, mode = ?, status = ?, error = ?, updatedAt = ?
       WHERE id = ?
     `)
     .run(
@@ -469,6 +496,7 @@ export function updateTask(
       JSON.stringify(next.urls),
       JSON.stringify(next.rubrics),
       next.rubricsSource,
+      next.rubricsModified ? 1 : 0,
       next.mode,
       next.status,
       next.error ?? null,
@@ -486,6 +514,70 @@ export function deleteResultForTaskUrl(taskId: string, url: string) {
   getDb().prepare("DELETE FROM results WHERE taskId = ? AND url = ?").run(taskId, url);
 }
 
+export function getManualDraft(taskId: string, url: string): ManualDraftRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM manual_drafts WHERE taskId = ? AND url = ?")
+    .get(taskId, url) as Record<string, unknown> | undefined;
+  return row ? rowToManualDraft(row) : null;
+}
+
+export function listManualDrafts(taskId: string): ManualDraftRecord[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM manual_drafts WHERE taskId = ? ORDER BY updatedAt ASC")
+    .all(taskId) as Record<string, unknown>[];
+  return rows.map(rowToManualDraft);
+}
+
+export function saveManualDraft(input: { taskId: string; url: string; scores: number[]; reasons: string[]; answeredCount: number }) {
+  const timestamp = now();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO manual_drafts (taskId, url, scores, reasons, answeredCount, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(taskId, url) DO UPDATE SET
+        scores = excluded.scores,
+        reasons = excluded.reasons,
+        answeredCount = excluded.answeredCount,
+        updatedAt = excluded.updatedAt
+    `,
+    )
+    .run(
+      input.taskId,
+      input.url,
+      JSON.stringify(input.scores),
+      JSON.stringify(input.reasons),
+      input.answeredCount,
+      timestamp,
+      timestamp,
+    );
+  return getManualDraft(input.taskId, input.url)!;
+}
+
+export function deleteManualDraft(taskId: string, url: string) {
+  getDb().prepare("DELETE FROM manual_drafts WHERE taskId = ? AND url = ?").run(taskId, url);
+}
+
+export function deleteManualDraftsForTask(taskId: string) {
+  getDb().prepare("DELETE FROM manual_drafts WHERE taskId = ?").run(taskId);
+}
+
+export function migrateManualDraftsAfterRubricRemoval(taskId: string, removedIndexes: number[], nextRubricCount: number) {
+  if (!removedIndexes.length) return;
+  const removed = new Set(removedIndexes);
+  for (const draft of listManualDrafts(taskId)) {
+    const nextScores = draft.scores.filter((_score, index) => !removed.has(index));
+    const nextReasons = draft.reasons.filter((_reason, index) => !removed.has(index));
+    saveManualDraft({
+      taskId,
+      url: draft.url,
+      scores: nextScores,
+      reasons: nextReasons,
+      answeredCount: firstUnansweredIndex(nextReasons, nextRubricCount),
+    });
+  }
+}
+
 export function updateResultScoresAndReasons(resultId: string, scores: number[], reasons: string[]) {
   getDb()
     .prepare(
@@ -500,6 +592,17 @@ export function updateResultScoresAndReasons(resultId: string, scores: number[],
 
 export function deleteTaskLogsForTask(taskId: string) {
   getDb().prepare("DELETE FROM task_logs WHERE taskId = ?").run(taskId);
+}
+
+export function deleteTask(taskId: string) {
+  const db = getDb();
+  const transaction = db.transaction(() => {
+    deleteManualDraftsForTask(taskId);
+    deleteResultsForTask(taskId);
+    deleteTaskLogsForTask(taskId);
+    db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
+  });
+  transaction();
 }
 
 export function saveTaskLog(input: { taskId: string; message: string; extra?: unknown }): TaskLog {
@@ -602,6 +705,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     rubricsSource: ["user", "generated", "none"].includes(String(row.rubricsSource))
       ? (String(row.rubricsSource) as Task["rubricsSource"])
       : "generated",
+    rubricsModified: Number(row.rubricsModified ?? 0) === 1,
     mode: ["auto", "manual"].includes(String(row.mode)) ? (String(row.mode) as TaskMode) : "manual",
     status: String(row.status) as TaskStatus,
     error: row.error ? String(row.error) : undefined,
@@ -609,4 +713,21 @@ function rowToTask(row: Record<string, unknown>): Task {
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };
+}
+
+function rowToManualDraft(row: Record<string, unknown>): ManualDraftRecord {
+  return {
+    taskId: String(row.taskId),
+    url: String(row.url),
+    scores: parseJson<number[]>(String(row.scores), []),
+    reasons: parseJson<string[]>(String(row.reasons), []),
+    answeredCount: Number(row.answeredCount ?? 0),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function firstUnansweredIndex(reasons: string[], count: number) {
+  const index = reasons.findIndex((reason, reasonIndex) => reasonIndex < count && !reason.trim());
+  return index >= 0 ? index : count;
 }

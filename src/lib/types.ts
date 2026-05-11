@@ -35,6 +35,7 @@ export type Task = {
   urls: string[];
   rubrics: Rubric[];
   rubricsSource: "user" | "generated" | "none";
+  rubricsModified: boolean;
   mode: TaskMode;
   status: TaskStatus;
   error?: string;

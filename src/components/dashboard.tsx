@@ -106,16 +106,6 @@ export function Dashboard() {
       void loadResults(activeTask.id);
     };
 
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key !== "manual-score-updated" || !event.newValue) return;
-      try {
-        const payload = JSON.parse(event.newValue) as { taskId?: string };
-        if (payload.taskId === activeTask.id) refreshActiveTaskResults();
-      } catch {
-        refreshActiveTaskResults();
-      }
-    };
-
     const handleFocus = () => {
       refreshActiveTaskResults();
     };
@@ -124,11 +114,9 @@ export function Dashboard() {
       if (document.visibilityState === "visible") refreshActiveTaskResults();
     };
 
-    window.addEventListener("storage", handleStorage);
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      window.removeEventListener("storage", handleStorage);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
@@ -402,6 +390,30 @@ export function Dashboard() {
     }
   }
 
+  async function deleteTaskById(task: Task) {
+    const isRunning = runningTaskIds.has(task.id) || runningStatuses.includes(task.status);
+    if (isRunning) return;
+    if (!window.confirm(`确认删除任务 ${task.id} 吗？相关结果、日志和手工草稿都会一起删除。`)) return;
+
+    const wasActive = activeTask?.id === task.id;
+    await run("delete-task", `任务 ${task.id} 已删除。`, async () => {
+      const response = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(await response.text());
+      setTasks((current) => current.filter((item) => item.id !== task.id));
+      setRunningTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(task.id);
+        return next;
+      });
+      if (wasActive) {
+        setActiveTask(null);
+        setResults([]);
+        setTaskLogs([]);
+        setRubricsReviewOpen(false);
+      }
+    });
+  }
+
   async function rerunActiveTask() {
     if (!activeTask) return;
     setNotice({ kind: "info", text: `任务 ${activeTask.id} 已重新开始。` });
@@ -512,7 +524,13 @@ export function Dashboard() {
                     return (
                       <tr
                         key={task.id}
-                        className={[activeTask?.id === task.id ? "active-row" : "", `task-row-${task.status}`].filter(Boolean).join(" ")}
+                        className={[
+                          activeTask?.id === task.id ? "active-row" : "",
+                          `task-row-${task.status}`,
+                          task.rubricsModified ? "task-row-rubrics-modified" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
                         onClick={() => {
                           setActiveTask(task);
                           void loadResults(task.id);
@@ -535,19 +553,31 @@ export function Dashboard() {
                         </td>
                         <td>{formatTime(task.updatedAt)}</td>
                         <td>
-                          <button
-                            className="small-button"
-                            disabled={runningTaskIds.has(task.id)}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setNotice({ kind: "info", text: `任务 ${task.id} 已重新开始。` });
-                              setActiveTask(task);
-                              setResults([]);
-                              void runTask(task.id);
-                            }}
-                          >
-                            重跑
-                          </button>
+                          <div className="row-actions">
+                            <button
+                              className="small-button"
+                              disabled={runningTaskIds.has(task.id)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setNotice({ kind: "info", text: `任务 ${task.id} 已重新开始。` });
+                                setActiveTask(task);
+                                setResults([]);
+                                void runTask(task.id);
+                              }}
+                            >
+                              重跑
+                            </button>
+                            <button
+                              className="small-button danger-button"
+                              disabled={runningTaskIds.has(task.id) || runningStatuses.includes(task.status)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void deleteTaskById(task);
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -783,7 +813,10 @@ function ResultView({
     setRubricError("");
   }, [task.rubrics, rubricDirty]);
 
-  const rubricsCopyText = task.rubrics.map((rubric, index) => `${index + 1}. ${rubric.description}`).join("\n");
+  const rubricsCopyText = task.rubrics
+    .map((rubric, index) => `${index + 1}. ${rubric.description}`)
+    .map(stripRubricListMarker)
+    .join("\n");
   const orderedResults = task.urls
     .map((url) => results.find((result) => result.url === url))
     .filter((result): result is ScoreResult => Boolean(result));
@@ -1112,7 +1145,7 @@ function parseRubricsInput(value: string): Rubric[] {
 
   const lines = text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map(stripRubricListMarker)
     .filter(Boolean);
 
   if (!lines.length) throw new Error("请按一行一条规则填写 Rubrics，或留空自动生成。");
@@ -1122,6 +1155,10 @@ function parseRubricsInput(value: string): Rubric[] {
     description,
     evidenceHints: [],
   }));
+}
+
+function stripRubricListMarker(value: string) {
+  return value.trim().replace(/^\d+\s*(?:[、。．)）]|\.(?=\s))\s*/, "").trim();
 }
 
 function parseCaseRows(value: string): ParsedCaseRow[] {
@@ -1199,10 +1236,10 @@ function normalizeCaseRubricsText(value: string) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  if (lines.length > 1) return lines.join("\n");
+  if (lines.length > 1) return lines.map(stripRubricListMarker).filter(Boolean).join("\n");
 
   const matched = value.match(/\d+\s*[.、][\s\S]*?(?=\s+\d+\s*[.、]|$)/g);
-  return (matched?.length ? matched : lines).map((line) => line.trim()).filter(Boolean).join("\n");
+  return (matched?.length ? matched : lines).map(stripRubricListMarker).filter(Boolean).join("\n");
 }
 
 function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {

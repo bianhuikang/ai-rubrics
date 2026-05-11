@@ -13,6 +13,7 @@ type ManualDraft = {
   scores: number[];
   reasons: string[];
   answeredCount: number;
+  updatedAt?: string;
 };
 
 export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
@@ -33,20 +34,24 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
 
   useEffect(() => {
     async function load() {
-      const [taskResponse, resultsResponse] = await Promise.all([
+      const [taskResponse, resultsResponse, draftResponse] = await Promise.all([
         fetch(`/api/tasks/${taskId}`),
         fetch(`/api/tasks/${taskId}/results`),
+        fetch(`/api/tasks/${taskId}/manual-draft?url=${encodeURIComponent(url)}`),
       ]);
       if (!taskResponse.ok) throw new Error(await taskResponse.text());
       if (!resultsResponse.ok) throw new Error(await resultsResponse.text());
+      if (!draftResponse.ok) throw new Error(await draftResponse.text());
 
       const nextTask = (await taskResponse.json()) as Task;
       const resultData = (await resultsResponse.json()) as { results: ScoreResult[] };
+      const draftData = (await draftResponse.json()) as { draft: ManualDraft | null };
       const existing = resultData.results.find((result) => result.url === url);
-      const draft = loadDraft(taskId, url, nextTask.rubrics.length);
-      const nextScores = existing?.scores ?? draft?.scores ?? nextTask.rubrics.map(() => 0);
-      const nextReasons = ensureReasonLength(existing?.reasons ?? draft?.reasons, nextTask.rubrics.length);
-      const nextAnsweredCount = existing ? nextTask.rubrics.length : draft?.answeredCount ?? 0;
+      const draft = draftData.draft;
+      const useDraft = Boolean(draft && (!existing || new Date(draft.updatedAt ?? 0).getTime() > new Date(existing.createdAt).getTime()));
+      const nextScores = (useDraft ? draft?.scores : existing?.scores) ?? nextTask.rubrics.map(() => 0);
+      const nextReasons = ensureReasonLength((useDraft ? draft?.reasons : existing?.reasons) ?? undefined, nextTask.rubrics.length);
+      const nextAnsweredCount = useDraft || !existing ? firstUnansweredIndex(nextReasons, nextTask.rubrics.length) : nextTask.rubrics.length;
 
       setTask(nextTask);
       setResults(resultData.results);
@@ -54,7 +59,12 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       setReasons(nextReasons);
       setAnsweredCount(nextAnsweredCount);
       setCurrentIndex(Math.min(nextAnsweredCount, nextTask.rubrics.length));
-      setNotice(existing ? "已完成" : draft ? "已恢复本地进度" : "");
+      if (useDraft && !existing) {
+        if (nextTask.rubrics.length > 0 && nextAnsweredCount >= nextTask.rubrics.length) {
+          void saveManualScore(nextScores, nextReasons);
+        }
+      }
+      setNotice(existing && !useDraft ? "已完成" : useDraft ? "已恢复服务端进度" : "");
     }
 
     load().catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
@@ -85,8 +95,6 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       const data = (await response.json()) as { task: Task; results: ScoreResult[] };
       setTask(data.task);
       setResults(data.results);
-      notifyManualScoreUpdated(taskId, url);
-      clearDraft(taskId, url);
       const nextPageUrl = findNextUrl(data.task.urls, url);
       if (nextPageUrl) {
         setNotice("已完成并保存，打开下一页...");
@@ -105,7 +113,18 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     }
   }
 
-  function commitAnswer(score: number, reason: string) {
+  async function saveManualDraft(nextScores: number[], nextReasons: string[], nextAnsweredCount: number) {
+    const response = await fetch(`/api/tasks/${taskId}/manual-draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, scores: nextScores, reasons: nextReasons, answeredCount: nextAnsweredCount }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const data = (await response.json()) as { draft: ManualDraft };
+    return data.draft;
+  }
+
+  async function commitAnswer(score: number, reason: string) {
     if (!task || currentIndex >= task.rubrics.length) return;
 
     const nextScores = scores.map((current, index) => (index === currentIndex ? score : current));
@@ -113,28 +132,46 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     const nextAnsweredCount = Math.max(answeredCount, firstUnansweredIndex(nextReasons, task.rubrics.length));
     const nextIndex = firstUnansweredIndex(nextReasons, task.rubrics.length);
 
-    setLastChoice(score);
-    setScores(nextScores);
-    setReasons(nextReasons);
-    setAnsweredCount(nextAnsweredCount);
-    setCurrentIndex(nextIndex);
-    setPendingFailIndex(null);
-    setPendingPageFail(false);
-    setFailReason("");
-    setPageFailReason("");
+    try {
+      setSaving(true);
+      setLastChoice(score);
+      setNotice("保存中...");
 
-    if (nextIndex >= task.rubrics.length) {
-      void saveManualScore(nextScores, nextReasons);
-      return;
+      if (nextIndex >= task.rubrics.length) {
+        setScores(nextScores);
+        setReasons(nextReasons);
+        setAnsweredCount(nextAnsweredCount);
+        setCurrentIndex(nextIndex);
+        setPendingFailIndex(null);
+        setPendingPageFail(false);
+        setFailReason("");
+        setPageFailReason("");
+        await saveManualScore(nextScores, nextReasons);
+        return;
+      }
+
+      const savedDraft = await saveManualDraft(nextScores, nextReasons, nextAnsweredCount);
+      const savedReasons = ensureReasonLength(savedDraft.reasons, task.rubrics.length);
+      const savedIndex = firstUnansweredIndex(savedReasons, task.rubrics.length);
+      setScores(savedDraft.scores);
+      setReasons(savedReasons);
+      setAnsweredCount(savedDraft.answeredCount);
+      setCurrentIndex(savedIndex);
+      setPendingFailIndex(null);
+      setPendingPageFail(false);
+      setFailReason("");
+      setPageFailReason("");
+      setNotice(score ? "已记录并保存，继续下一条" : "已记录原因并保存，继续下一条");
+      window.setTimeout(() => setLastChoice(null), 220);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
     }
-
-    saveDraft(taskId, url, { scores: nextScores, reasons: nextReasons, answeredCount: nextAnsweredCount });
-    setNotice(score ? "已记录，继续下一条" : "已记录原因，继续下一条");
-    window.setTimeout(() => setLastChoice(null), 220);
   }
 
   function answerPass() {
-    commitAnswer(1, "人工标记符合");
+    void commitAnswer(1, "人工标记符合");
   }
 
   function answerFail() {
@@ -152,7 +189,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       return;
     }
     if (pendingFailIndex !== currentIndex) return;
-    commitAnswer(0, reason);
+    void commitAnswer(0, reason);
   }
 
   function answerAllFail() {
@@ -203,18 +240,27 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setNotice(`已回到第 ${index + 1} 条`);
   }
 
-  function restartCheck() {
+  async function restartCheck() {
     if (!task) return;
-    clearDraft(taskId, url);
-    setScores(task.rubrics.map(() => 0));
-    setReasons(task.rubrics.map(() => ""));
-    setAnsweredCount(0);
-    setCurrentIndex(0);
-    setPendingFailIndex(null);
-    setPendingPageFail(false);
-    setFailReason("");
-    setPageFailReason("");
-    setNotice("");
+    const nextScores = task.rubrics.map(() => 0);
+    const nextReasons = task.rubrics.map(() => "");
+    try {
+      setSaving(true);
+      await saveManualDraft(nextScores, nextReasons, 0);
+      setScores(nextScores);
+      setReasons(nextReasons);
+      setAnsweredCount(0);
+      setCurrentIndex(0);
+      setPendingFailIndex(null);
+      setPendingPageFail(false);
+      setFailReason("");
+      setPageFailReason("");
+      setNotice("已重置并保存服务端进度");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function suppressSpaceActivation(event: KeyboardEvent<HTMLButtonElement>) {
@@ -352,7 +398,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
             <div className="manual-rubric-focus complete">
               <p>当前页面已检查完成。</p>
               <div className="manual-answer-buttons">
-                <button className="manual-rubric-toggle" onClick={restartCheck} disabled={saving} type="button">
+                <button className="manual-rubric-toggle" onClick={() => void restartCheck()} disabled={saving} type="button">
                   重新检查
                 </button>
                 {nextUrl ? (
@@ -388,31 +434,6 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   );
 }
 
-function draftKey(taskId: string, url: string) {
-  return `manual-check:${taskId}:${url}`;
-}
-
-function loadDraft(taskId: string, url: string, rubricCount: number): ManualDraft | null {
-  try {
-    const raw = window.localStorage.getItem(draftKey(taskId, url));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { scores?: unknown; reasons?: unknown; answeredCount?: unknown };
-    if (!Array.isArray(parsed.scores) || typeof parsed.answeredCount !== "number") return null;
-    if (parsed.scores.length !== rubricCount) return null;
-    return {
-      scores: parsed.scores.map((score) => (score ? 1 : 0)),
-      reasons: ensureReasonLength(Array.isArray(parsed.reasons) ? parsed.reasons.map(String) : undefined, rubricCount),
-      answeredCount: Math.min(Math.max(0, parsed.answeredCount), rubricCount),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function saveDraft(taskId: string, url: string, draft: ManualDraft) {
-  window.localStorage.setItem(draftKey(taskId, url), JSON.stringify(draft));
-}
-
 function ensureReasonLength(value: string[] | undefined, count: number) {
   return Array.from({ length: count }, (_item, index) => value?.[index] ?? "");
 }
@@ -420,21 +441,6 @@ function ensureReasonLength(value: string[] | undefined, count: number) {
 function firstUnansweredIndex(reasons: string[], count: number) {
   const index = reasons.findIndex((reason, reasonIndex) => reasonIndex < count && !reason.trim());
   return index >= 0 ? index : count;
-}
-
-function clearDraft(taskId: string, url: string) {
-  window.localStorage.removeItem(draftKey(taskId, url));
-}
-
-function notifyManualScoreUpdated(taskId: string, url: string) {
-  window.localStorage.setItem(
-    "manual-score-updated",
-    JSON.stringify({
-      taskId,
-      url,
-      updatedAt: Date.now(),
-    }),
-  );
 }
 
 function findNextUrl(urls: string[], currentUrl: string) {
