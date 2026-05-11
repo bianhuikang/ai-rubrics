@@ -57,6 +57,7 @@ export function Dashboard() {
   const [prompt, setPrompt] = useState("");
   const [urlsText, setUrlsText] = useState("");
   const [rubricsText, setRubricsText] = useState("");
+  const rubricNormalizationInFlightRef = useRef<string | null>(null);
   const manualMode = true;
 
   useEffect(() => {
@@ -98,6 +99,38 @@ export function Dashboard() {
 
     return () => window.clearInterval(timer);
   }, [activeTask?.id, activeTask?.mode, activeTask?.status]);
+
+  useEffect(() => {
+    if (!activeTask) return;
+
+    const normalizedRubrics = normalizeRubricsIfNeeded(activeTask.rubrics);
+    if (!normalizedRubrics) return;
+
+    const taskIdToNormalize = activeTask.id;
+    if (rubricNormalizationInFlightRef.current === taskIdToNormalize) return;
+    rubricNormalizationInFlightRef.current = taskIdToNormalize;
+
+    void (async () => {
+      try {
+        const response = await fetch(`/api/tasks/${taskIdToNormalize}/rubrics`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rubrics: normalizedRubrics, removedIndexes: [], preserveRubricsModified: true }),
+        });
+        const data = (await response.json()) as { task?: Task; results?: ScoreResult[]; error?: string };
+        if (!response.ok || !data.task || !data.results) throw new Error(data.error || "Rubrics 保存失败");
+        setTasks((current) => current.map((task) => (task.id === data.task?.id ? data.task! : task)));
+        setActiveTask((current) => (current?.id === data.task?.id ? data.task! : current));
+        setResults(data.results);
+      } catch (error) {
+        setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      } finally {
+        if (rubricNormalizationInFlightRef.current === taskIdToNormalize) {
+          rubricNormalizationInFlightRef.current = null;
+        }
+      }
+    })();
+  }, [activeTask?.id, activeTask?.rubrics]);
 
   useEffect(() => {
     if (!activeTask) return;
@@ -447,6 +480,9 @@ export function Dashboard() {
         <div className="topbar-title">
           <div className="title-row">
             <h1>AI Rubrics Judge</h1>
+            <a className="button-link small-button docs-button" href="/docs" target="_blank" rel="noreferrer">
+              使用文档
+            </a>
           </div>
     
         </div>
@@ -828,8 +864,7 @@ function ResultView({
   }, [task.rubrics, rubricDirty]);
 
   const rubricsCopyText = task.rubrics
-    .map((rubric, index) => `${index + 1}. ${rubric.description}`)
-    .map(stripRubricListMarker)
+    .map((rubric, index) => `${index + 1}. ${rubric.description.trim()}`)
     .join("\n");
   const orderedResults = task.urls
     .map((url) => results.find((result) => result.url === url))
@@ -1173,6 +1208,20 @@ function parseRubricsInput(value: string): Rubric[] {
 
 function stripRubricListMarker(value: string) {
   return value.trim().replace(/^\d+\s*(?:[、。．)）]|\.(?=\s))\s*/, "").trim();
+}
+
+function normalizeRubricsIfNeeded(rubrics: Rubric[]) {
+  let changed = false;
+  const normalized = rubrics.map((rubric) => {
+    const description = stripRubricNumberPrefix(rubric.description);
+    if (description !== rubric.description.trim()) changed = true;
+    return { ...rubric, description };
+  });
+  return changed ? normalized : null;
+}
+
+function stripRubricNumberPrefix(value: string) {
+  return value.replace(/^\s*\d+\s*[.、。．)\]）]\s*/, "").trim();
 }
 
 function parseCaseRows(value: string): ParsedCaseRow[] {

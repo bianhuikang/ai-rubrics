@@ -71,12 +71,30 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   }, [taskId, url]);
 
   const completedCount = useMemo(() => reasons.filter((reason) => reason.trim()).length, [reasons]);
+  const failReasonSuggestions = useMemo(() => {
+    if (!task || pendingFailIndex !== currentIndex) return [];
+    const currentUrlIndex = task.urls.findIndex((item) => item === url);
+    if (currentUrlIndex <= 0) return [];
+
+    const uniqueReasons: string[] = [];
+    const seen = new Set<string>();
+    for (const taskUrl of task.urls.slice(0, currentUrlIndex)) {
+      const result = results.find((item) => item.url === taskUrl);
+      if (!result || result.scores[currentIndex] !== 0) continue;
+      const reason = result?.reasons[currentIndex]?.trim();
+      if (!reason || reason === "人工标记符合" || seen.has(reason)) continue;
+      seen.add(reason);
+      uniqueReasons.push(reason);
+    }
+    return uniqueReasons.slice(0, 12);
+  }, [currentIndex, pendingFailIndex, results, task, url]);
 
   const scoreSummary = useMemo(() => {
     return `进度 ${completedCount}/${scores.length}`;
   }, [completedCount, scores.length]);
 
   const currentRubric = task?.rubrics[currentIndex];
+  const showFailReason = pendingPageFail || pendingFailIndex === currentIndex;
   const isComplete = Boolean(task?.rubrics.length && completedCount >= task.rubrics.length && currentIndex >= task.rubrics.length);
   const nextUrl = task ? findNextUrl(task.urls, url) : null;
   const sourceZipUrl = getSourceZipUrl(url);
@@ -102,7 +120,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
           window.location.href = `/manual/${encodeURIComponent(taskId)}?url=${encodeURIComponent(nextPageUrl)}`;
         }, 350);
       } else {
-        setNotice("恭喜！所有页面检查完成");
+        setNotice("恭喜，所有页面检查完成");
         setAllDoneFlash(true);
         window.setTimeout(() => setAllDoneFlash(false), 1800);
       }
@@ -198,14 +216,14 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setPendingFailIndex(null);
     setPendingPageFail(true);
     setPageFailReason("");
-    setNotice("请填写页面全不符合理由");
+    setNotice("请输入页面全不符合理由");
   }
 
   function submitPageFailReason() {
     if (!task) return;
     const reason = pageFailReason.trim();
     if (!reason) {
-      setNotice("请填写页面全不符合理由");
+      setNotice("请输入页面全不符合理由");
       return;
     }
     const nextScores = task.rubrics.map(() => 0);
@@ -275,10 +293,10 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
 
   return (
     <main className="manual-check-page">
-      <aside className={`manual-check-bar ${allDoneFlash ? "all-done-flash" : ""}`}>
+      <aside className={`manual-check-bar ${showFailReason ? "with-fail-reason" : ""} ${allDoneFlash ? "all-done-flash" : ""}`}>
         <div className="manual-check-meta">
           <div className="manual-meta-title">
-            <strong>手动检查</strong>
+            <strong>手工检查</strong>
             {sourceZipUrl ? (
               <a className="manual-source-link" href={sourceZipUrl} download target="_blank" rel="noreferrer">
                 下载源码
@@ -314,7 +332,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
           ) : null}
         </div>
 
-        <div className="manual-rubrics">
+        <div className={`manual-rubrics ${showFailReason ? "with-fail-reason" : ""}`}>
           {currentRubric ? (
             <div className={`manual-rubric-focus ${pendingFailIndex === currentIndex || pendingPageFail ? "with-reason" : ""}`}>
               <p>
@@ -335,7 +353,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                     onKeyDown={(event) => {
                       if (event.key === "Enter") submitPageFailReason();
                     }}
-                    placeholder="页面全不符合理由"
+                    placeholder="页面全部不符合理由"
                   />
                   <button className="manual-rubric-toggle fail-choice" onClick={submitPageFailReason} disabled={saving} type="button">
                     确认
@@ -346,15 +364,31 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                 </div>
               ) : pendingFailIndex === currentIndex ? (
                 <div className="manual-fail-reason">
-                  <input
-                    autoFocus
-                    value={failReason}
-                    onChange={(event) => setFailReason(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") submitFailReason();
-                    }}
-                    placeholder="不符合理由"
-                  />
+                  <div className="manual-fail-reason-field">
+                    <input
+                      autoFocus
+                      value={failReason}
+                      onChange={(event) => setFailReason(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") submitFailReason();
+                      }}
+                      placeholder="不符合理由"
+                    />
+                    {failReasonSuggestions.length ? (
+                      <div className="manual-fail-suggestions" role="listbox" aria-label="历史理由">
+                        {failReasonSuggestions.map((reason) => (
+                          <button
+                            key={reason}
+                            className="manual-fail-suggestion"
+                            onClick={() => setFailReason(reason)}
+                            type="button"
+                          >
+                            {reason}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   <button className="manual-rubric-toggle fail-choice" onClick={submitFailReason} disabled={saving} type="button">
                     确认
                   </button>
@@ -421,12 +455,11 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
             <span className="manual-muted">加载 rubrics...</span>
           )}
         </div>
-
         <div className="manual-check-actions">
           <span>{notice}</span>
           <span>{results.length ? `已完成页面检查：${results.length}/${task?.urls.length ?? 0}` : ""}</span>
         </div>
-        {allDoneFlash ? <div className="manual-complete-toast">恭喜！所有页面检查完成</div> : null}
+        {allDoneFlash ? <div className="manual-complete-toast">恭喜，所有页面检查完成</div> : null}
       </aside>
 
       <iframe className="manual-target-frame" src={url} title="manual target page" />
@@ -458,3 +491,4 @@ function getSourceZipUrl(url: string) {
     return "";
   }
 }
+

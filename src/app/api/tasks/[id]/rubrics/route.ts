@@ -17,6 +17,7 @@ const rubricSchema = z.object({
 const updateRubricsSchema = z.object({
   rubrics: z.array(rubricSchema).min(1),
   removedIndexes: z.array(z.number().int().min(0)).default([]),
+  preserveRubricsModified: z.boolean().default(false),
 });
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -56,6 +57,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       evidenceHints: rubric.evidenceHints || [],
     }));
     const rubricsChanged = JSON.stringify(normalizedRubrics) !== JSON.stringify(task.rubrics);
+    const nextRubricsModified = input.preserveRubricsModified ? task.rubricsModified : task.rubricsModified || rubricsChanged;
 
     const removedIndexes = Array.from(new Set(input.removedIndexes)).sort((a, b) => b - a);
     if (removedIndexes.length) {
@@ -70,7 +72,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     const updated = updateTask(id, {
       rubrics: normalizedRubrics,
       rubricsSource: task.rubricsSource === "none" ? "user" : task.rubricsSource,
-      rubricsModified: task.rubricsModified || rubricsChanged,
+      rubricsModified: nextRubricsModified,
       error: undefined,
     });
     return NextResponse.json({ task: updated, results: listResults(id) });
