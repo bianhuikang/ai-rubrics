@@ -293,6 +293,22 @@ select:focus {
   white-space: nowrap;
 }
 
+.task-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 260px;
+}
+
+.task-search-input {
+  width: 190px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
 .settings-title {
   display: flex;
   align-items: baseline;
@@ -1311,6 +1327,11 @@ pre {
 
   .manual-check-bar {
     grid-template-columns: 1fr;
+  }
+
+  .task-header-actions,
+  .task-search-input {
+    width: 100%;
   }
 
   .rubrics-review-grid {

@@ -44,6 +44,7 @@ export function Dashboard() {
   const [editingNewConfig, setEditingNewConfig] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskSearch, setTaskSearch] = useState("");
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [results, setResults] = useState<ScoreResult[]>([]);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
@@ -138,6 +139,11 @@ export function Dashboard() {
       unfinished: tasks.length - completed,
     };
   }, [tasks]);
+  const filteredTasks = useMemo(() => {
+    const keyword = taskSearch.trim().toLowerCase();
+    if (!keyword) return tasks;
+    return tasks.filter((task) => task.id.toLowerCase().includes(keyword));
+  }, [taskSearch, tasks]);
 
   async function refreshAll(options: { keepSelection?: boolean } = {}) {
     const [settingsResponse, tasksResponse] = await Promise.all([fetch("/api/settings"), fetch("/api/tasks")]);
@@ -503,7 +509,15 @@ export function Dashboard() {
               <span>已完成 {taskStats.completed}</span>
               <span>未完成 {taskStats.unfinished}</span>
             </div>
-            <button onClick={() => void refreshAll({ keepSelection: true })}>刷新</button>
+            <div className="task-header-actions">
+              <input
+                className="task-search-input"
+                value={taskSearch}
+                onChange={(event) => setTaskSearch(event.target.value)}
+                placeholder="搜索任务 ID"
+              />
+              <button onClick={() => void refreshAll({ keepSelection: true })}>刷新</button>
+            </div>
           </div>
           <div className="table-wrap">
             <table className="task-table">
@@ -518,8 +532,8 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {tasks.length ? (
-                  tasks.map((task) => {
+                {filteredTasks.length ? (
+                  filteredTasks.map((task) => {
                     const progress = taskProgress(task);
                     return (
                       <tr
