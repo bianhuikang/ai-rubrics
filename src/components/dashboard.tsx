@@ -769,11 +769,19 @@ function ResultView({
   const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => rubric.description));
   const [rubricBusy, setRubricBusy] = useState<number | null>(null);
   const [rubricError, setRubricError] = useState("");
+  const [rubricDirty, setRubricDirty] = useState(false);
 
   useEffect(() => {
     setRubricDrafts(task.rubrics.map((rubric) => rubric.description));
     setRubricError("");
-  }, [task.id, task.rubrics]);
+    setRubricDirty(false);
+  }, [task.id]);
+
+  useEffect(() => {
+    if (rubricDirty) return;
+    setRubricDrafts(task.rubrics.map((rubric) => rubric.description));
+    setRubricError("");
+  }, [task.rubrics, rubricDirty]);
 
   const rubricsCopyText = task.rubrics.map((rubric, index) => `${index + 1}. ${rubric.description}`).join("\n");
   const orderedResults = task.urls
@@ -799,6 +807,9 @@ function ResultView({
     const data = (await response.json()) as { task?: Task; results?: ScoreResult[]; error?: string };
     if (!response.ok || !data.task || !data.results) throw new Error(data.error || "Rubrics 保存失败");
     onRubricsUpdated(data.task, data.results);
+    setRubricDrafts(data.task.rubrics.map((rubric) => rubric.description));
+    setRubricDirty(false);
+    setRubricError("");
   }
 
   async function saveRubric(index: number) {
@@ -856,7 +867,10 @@ function ResultView({
               <input
                 value={rubricDrafts[index] ?? rubric.description}
                 onChange={(event) =>
-                  setRubricDrafts((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
+                  {
+                    setRubricDirty(true);
+                    setRubricDrafts((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)));
+                  }
                 }
               />
               <div className="rubric-edit-actions">
@@ -965,7 +979,7 @@ function ResultView({
             <thead>
               <tr>
                 <th className="col-index">序号</th>
-                <th className="col-url">产物尾部</th>
+                <th className="col-url">URL前缀</th>
                 {task.rubrics.map((rubric) => (
                   <th key={rubric.id} title={rubric.description}>
                     {rubric.id}
@@ -982,7 +996,7 @@ function ResultView({
                     <td className="col-index">{index + 1}</td>
                     <td className="col-url">
                       <a href={result.url} target="_blank" rel="noreferrer" title={result.url}>
-                        {urlTail(result.url)}
+                        {urlPrefixBeforeHtml(result.url)}
                       </a>
                     </td>
                     {result.scores.map((score, scoreIndex) => (
@@ -1352,5 +1366,15 @@ function urlTail(url: string) {
     return tail || parsed.host;
   } catch {
     return url.length > 42 ? url.slice(-42) : url;
+  }
+}
+
+function urlPrefixBeforeHtml(url: string) {
+  try {
+    const parsed = new URL(url);
+    const prefix = parsed.pathname.replace(/\.html?$/i, "");
+    return `${parsed.host}${prefix}` || parsed.host;
+  } catch {
+    return url.replace(/\.html?(\?|#|$)/i, "");
   }
 }

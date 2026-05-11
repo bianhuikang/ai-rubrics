@@ -546,8 +546,8 @@ select:focus {
 }
 
 .score-table .col-url {
-  min-width: 180px;
-  max-width: 320px;
+  min-width: 240px;
+  max-width: 420px;
   text-align: left;
 }
 
@@ -972,7 +972,7 @@ summary {
 
 .manual-rubrics {
   display: grid;
-  max-height: 100px;
+  max-height: 130px;
   overflow: auto;
 }
 
@@ -991,8 +991,9 @@ summary {
 .manual-rubric-focus p {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
-  line-height: 1.25;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .manual-rubric-toggle {

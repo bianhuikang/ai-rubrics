@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import type { ScoreResult, Task } from "@/lib/types";
 
 type ManualCheckClientProps = {
@@ -216,6 +217,12 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setNotice("");
   }
 
+  function suppressSpaceActivation(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === " " || event.key === "Spacebar") {
+      event.preventDefault();
+    }
+  }
+
   if (!url) {
     return <main className="manual-page-error">缺少 URL。</main>;
   }
@@ -232,7 +239,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
               </a>
             ) : null}
           </div>
-          <span title={url}>{urlTail(url)}</span>
+          <span title={taskId}>{taskId}</span>
           <em>{scoreSummary}</em>
           {task?.rubrics.length ? (
             <div className="manual-score-dots" aria-label="当前页面评分进度">
@@ -314,6 +321,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                   <button
                     className={`manual-rubric-toggle fail-choice ${lastChoice === 0 ? "just-picked" : ""}`}
                     onClick={answerFail}
+                    onKeyDown={suppressSpaceActivation}
                     disabled={saving}
                     type="button"
                   >
@@ -322,12 +330,19 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                   <button
                     className={`manual-rubric-toggle pass-choice ${lastChoice === 1 ? "just-picked" : ""}`}
                     onClick={answerPass}
+                    onKeyDown={suppressSpaceActivation}
                     disabled={saving}
                     type="button"
                   >
                     符合
                   </button>
-                  <button className="manual-rubric-toggle page-fail-choice" onClick={answerAllFail} disabled={saving} type="button">
+                  <button
+                    className="manual-rubric-toggle page-fail-choice"
+                    onClick={answerAllFail}
+                    onKeyDown={suppressSpaceActivation}
+                    disabled={saving}
+                    type="button"
+                  >
                     全不符合
                   </button>
                 </div>
@@ -435,15 +450,5 @@ function getSourceZipUrl(url: string) {
     return parsed.pathname.endsWith("code_files.zip") ? parsed.toString() : "";
   } catch {
     return "";
-  }
-}
-
-function urlTail(url: string) {
-  try {
-    const parsed = new URL(url);
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    return parts.slice(-2).join("/") || parsed.host;
-  } catch {
-    return url;
   }
 }
