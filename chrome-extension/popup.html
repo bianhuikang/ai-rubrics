@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        width: 260px;
+        margin: 0;
+        padding: 14px;
+        color: #1f2937;
+        font: 13px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+
+      .task-id {
+        min-height: 22px;
+        border: 1px solid #d7dde7;
+        border-radius: 6px;
+        padding: 8px;
+        background: #f8fafc;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        word-break: break-all;
+      }
+
+      button {
+        width: 100%;
+        margin-top: 10px;
+        border: 0;
+        border-radius: 6px;
+        padding: 9px 10px;
+        background: #2364aa;
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      .status {
+        min-height: 20px;
+        margin-top: 10px;
+        color: #64748b;
+        white-space: pre-wrap;
+      }
+
+      .error {
+        color: #b42318;
+      }
+
+      .success {
+        color: #067647;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>任务 ID</h1>
+    <div id="taskId" class="task-id">读取中...</div>
+    <button id="syncButton">同步当前记录</button>
+    <div id="status" class="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

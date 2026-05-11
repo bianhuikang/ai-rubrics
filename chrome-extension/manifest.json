@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "AI Rubrics Feishu Sync",
+  "version": "0.1.0",
+  "description": "Sync AI Rubrics Judge results into the selected Feishu/Lark sheet record.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "*://*.feishu.cn/*",
+    "*://*.larksuite.com/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.feishu.cn/*", "*://*.larksuite.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "AI Rubrics Sync",
+    "default_popup": "popup.html"
+  }
+}
