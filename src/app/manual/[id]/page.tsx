@@ -5,9 +5,9 @@ export default async function ManualCheckPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ url?: string }>;
+  searchParams: Promise<{ url?: string; qaRubrics?: string }>;
 }) {
   const { id } = await params;
-  const { url = "" } = await searchParams;
-  return <ManualCheckClient taskId={id} url={url} />;
+  const { url = "", qaRubrics = "" } = await searchParams;
+  return <ManualCheckClient taskId={id} url={url} qaRubrics={qaRubrics} />;
 }

@@ -34,6 +34,18 @@ type ParsedCaseRow = {
   rubricsText: string;
 };
 
+type QualityMismatch = {
+  url: string;
+  urlIndex: number;
+  rubricIndexes: number[];
+};
+
+type QualityLocator = {
+  taskId: string;
+  inputText: string;
+  matrix: number[][];
+};
+
 const runningStatuses: TaskStatus[] = ["queued", "generating-rubrics", "scoring"];
 
 export function Dashboard() {
@@ -53,6 +65,9 @@ export function Dashboard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(new Set());
   const [rubricsReviewOpen, setRubricsReviewOpen] = useState(false);
+  const [qualityLocatorOpen, setQualityLocatorOpen] = useState(false);
+  const [qualityScoreText, setQualityScoreText] = useState("");
+  const [qualityLocator, setQualityLocator] = useState<QualityLocator | null>(null);
   const [taskId, setTaskId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [urlsText, setUrlsText] = useState("");
@@ -71,6 +86,32 @@ export function Dashboard() {
     } else {
       setResults([]);
       setTaskLogs([]);
+    }
+  }, [activeTask?.id]);
+
+  useEffect(() => {
+    if (!activeTask) {
+      setQualityLocator(null);
+      setQualityScoreText("");
+      return;
+    }
+
+    const saved = window.localStorage.getItem(qualityLocatorStorageKey(activeTask.id));
+    if (!saved) {
+      setQualityLocator(null);
+      setQualityScoreText("");
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(saved) as QualityLocator;
+      if (parsed.taskId !== activeTask.id || !Array.isArray(parsed.matrix)) throw new Error("Invalid quality locator");
+      setQualityLocator(parsed);
+      setQualityScoreText(parsed.inputText);
+    } catch {
+      window.localStorage.removeItem(qualityLocatorStorageKey(activeTask.id));
+      setQualityLocator(null);
+      setQualityScoreText("");
     }
   }, [activeTask?.id]);
 
@@ -163,6 +204,11 @@ export function Dashboard() {
       max: activeTask?.rubrics.length ?? result.scores.length,
     }));
   }, [activeTask?.rubrics.length, results]);
+
+  const activeQualityTargets = useMemo(() => {
+    if (!activeTask || qualityLocator?.taskId !== activeTask.id) return [];
+    return findQualityMismatches(activeTask, results, qualityLocator.matrix);
+  }, [activeTask, qualityLocator, results]);
 
   const taskStats = useMemo(() => {
     const completed = tasks.filter((task) => task.status === "scored").length;
@@ -461,6 +507,44 @@ export function Dashboard() {
     void runTask(activeTask.id);
   }
 
+  function openQualityLocator() {
+    if (!activeTask) return;
+    setQualityScoreText(qualityLocator?.taskId === activeTask.id ? qualityLocator.inputText : "");
+    setQualityLocatorOpen(true);
+  }
+
+  function saveQualityLocator() {
+    if (!activeTask) return;
+    try {
+      const matrix = parseQualityScoreMatrix(qualityScoreText, activeTask);
+      const locator: QualityLocator = {
+        taskId: activeTask.id,
+        inputText: qualityScoreText,
+        matrix,
+      };
+      const mismatches = findQualityMismatches(activeTask, results, matrix);
+      window.localStorage.setItem(qualityLocatorStorageKey(activeTask.id), JSON.stringify(locator));
+      setQualityLocator(locator);
+      setQualityLocatorOpen(false);
+      setNotice({
+        kind: mismatches.length ? "success" : "info",
+        text: mismatches.length
+          ? `质检定位已保存，找到 ${mismatches.length} 个页面存在不一致。`
+          : "质检定位已保存，当前结果和质检分数一致。",
+      });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  function clearQualityLocator() {
+    if (activeTask) window.localStorage.removeItem(qualityLocatorStorageKey(activeTask.id));
+    setQualityLocator(null);
+    setQualityScoreText("");
+    setQualityLocatorOpen(false);
+    setNotice({ kind: "info", text: "已清除质检定位。" });
+  }
+
   async function run(key: string, success: string, action: () => Promise<void>) {
     try {
       setBusy(key);
@@ -652,6 +736,9 @@ export function Dashboard() {
             </div>
             {activeTask ? (
               <div className="actions">
+                <button onClick={openQualityLocator} disabled={!activeTask.rubrics.length}>
+                  质检定位
+                </button>
                 <button onClick={() => setRubricsReviewOpen(true)} disabled={!activeTask.rubrics.length}>
                   检查 Rubrics
                 </button>
@@ -674,6 +761,7 @@ export function Dashboard() {
               results={results}
               totals={activeTotals}
               logs={taskLogs}
+              qualityTargets={activeQualityTargets}
               onRubricsUpdated={(updatedTask, updatedResults) => {
                 setTasks((current) => current.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
                 setActiveTask((current) => (current?.id === updatedTask.id ? updatedTask : current));
@@ -714,6 +802,42 @@ export function Dashboard() {
                 </ul>
               </section>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {qualityLocatorOpen && activeTask ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setQualityLocatorOpen(false)}>
+          <section className="quality-locator-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-header">
+              <div>
+                <h2>质检定位</h2>
+                <p>{activeTask.id}</p>
+              </div>
+              <div className="actions">
+                <button onClick={clearQualityLocator} type="button">
+                  清除
+                </button>
+                <button onClick={() => setQualityLocatorOpen(false)} type="button">
+                  关闭
+                </button>
+                <button className="primary" onClick={saveQualityLocator} type="button">
+                  保存
+                </button>
+              </div>
+            </div>
+            <label>
+              质检分数数组
+              <textarea
+                value={qualityScoreText}
+                onChange={(event) => setQualityScoreText(event.target.value)}
+                rows={10}
+                placeholder='例如：[[1,0,1],[1,1,0]]，或每行一页：1,0,1'
+              />
+            </label>
+            <p className="field-hint">
+              按当前任务页面顺序和 Rubric 顺序比对，保存后会红框闪烁标出不一致页面，并把对应 Rubric 定位带到手工检查页。
+            </p>
           </section>
         </div>
       ) : null}
@@ -838,12 +962,14 @@ function ResultView({
   results,
   totals,
   logs,
+  qualityTargets,
   onRubricsUpdated,
 }: {
   task: Task;
   results: ScoreResult[];
   totals: Array<{ url: string; total: number; max: number }>;
   logs: TaskLog[];
+  qualityTargets: QualityMismatch[];
   onRubricsUpdated: (task: Task, results: ScoreResult[]) => void;
 }) {
   const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => rubric.description));
@@ -873,6 +999,9 @@ function ResultView({
   const scoreCopyText = JSON.stringify(orderedResults.map((result) => result.scores));
   const manualFailSummaries = task.mode === "manual" ? summarizeManualFailReasons(task, results) : [];
   const manualFailCopyText = manualFailSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n");
+  const qualityTargetByUrl = useMemo(() => {
+    return new Map(qualityTargets.map((target) => [target.url, target]));
+  }, [qualityTargets]);
 
   async function persistRubrics(nextDescriptions: string[], removedIndexes: number[] = []) {
     const rubrics = nextDescriptions.map((description, index) => ({
@@ -996,17 +1125,20 @@ function ResultView({
             {task.urls.map((url, index) => {
               const result = results.find((item) => item.url === url);
               const progress = result ? task.rubrics.length : 0;
+              const qualityTarget = qualityTargetByUrl.get(url);
+              const manualCheckHref = buildManualCheckHref(task.id, url, qualityTarget);
               return (
-                <li key={url}>
+                <li key={url} className={qualityTarget ? "quality-target-item" : ""}>
                   <a href={url} target="_blank" rel="noreferrer" title={url}>
                     {index + 1}. {urlTail(url)}
                   </a>
                   <span className="manual-score-chip">{`${progress}/${task.rubrics.length}`}</span>
                   <a
                     className={`button-link small-button ${index === 0 ? "manual-start-button" : ""}`}
-                    href={`/manual/${encodeURIComponent(task.id)}?url=${encodeURIComponent(url)}`}
+                    href={manualCheckHref}
                     target="_blank"
                     rel="noreferrer"
+                    title={qualityTarget ? `待复查 Rubric：${formatQualityRubrics(qualityTarget.rubricIndexes)}` : undefined}
                   >
                     {index === 0 ? "手动检查(请从这里开始)" : "手动检查"}
                   </a>
@@ -1073,8 +1205,9 @@ function ResultView({
             <tbody>
               {orderedResults.map((result, index) => {
                 const total = totals.find((item) => item.url === result.url);
+                const qualityTarget = qualityTargetByUrl.get(result.url);
                 return (
-                  <tr key={result.id}>
+                  <tr key={result.id} className={qualityTarget ? "quality-target-row" : ""}>
                     <td className="col-index">{index + 1}</td>
                     <td className="col-url">
                       <a href={result.url} target="_blank" rel="noreferrer" title={result.url}>
@@ -1082,7 +1215,12 @@ function ResultView({
                       </a>
                     </td>
                     {result.scores.map((score, scoreIndex) => (
-                      <td key={`${result.id}-${scoreIndex}`} className={score ? "pass" : "fail"}>
+                      <td
+                        key={`${result.id}-${scoreIndex}`}
+                        className={[score ? "pass" : "fail", qualityTarget?.rubricIndexes.includes(scoreIndex) ? "quality-target-cell" : ""]
+                          .filter(Boolean)
+                          .join(" ")}
+                      >
                         {score}
                       </td>
                     ))}
@@ -1145,6 +1283,85 @@ function ProcessPanel({
 
 async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
+}
+
+function qualityLocatorStorageKey(taskId: string) {
+  return `ai-rubrics-quality-locator:${taskId}`;
+}
+
+function parseQualityScoreMatrix(value: string, task: Task) {
+  const text = value.trim();
+  if (!text) throw new Error("请粘贴质检人员给的分数数组。");
+
+  const parsed = parseScoreMatrixInput(text);
+  if (!parsed.length) throw new Error("没有识别到分数数组。");
+  if (parsed.length > task.urls.length) throw new Error(`分数数组有 ${parsed.length} 行，当前任务只有 ${task.urls.length} 个页面。`);
+
+  parsed.forEach((row, rowIndex) => {
+    if (!row.length) throw new Error(`第 ${rowIndex + 1} 行为空。`);
+    if (row.length > task.rubrics.length) {
+      throw new Error(`第 ${rowIndex + 1} 行有 ${row.length} 列，当前任务只有 ${task.rubrics.length} 条 Rubric。`);
+    }
+  });
+
+  return parsed;
+}
+
+function parseScoreMatrixInput(text: string): number[][] {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      if (parsed.every((item) => typeof item === "number" || typeof item === "string")) {
+        return [normalizeScoreRow(parsed)];
+      }
+      if (parsed.every(Array.isArray)) {
+        return parsed.map((row) => normalizeScoreRow(row as unknown[]));
+      }
+    }
+  } catch {
+    // Fall through to tolerant line parsing.
+  }
+
+  const rows = text
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^\[|\]$/g, ""))
+    .filter(Boolean);
+  return rows.map((row) => normalizeScoreRow(row.split(/[\s,，;；]+/).filter(Boolean)));
+}
+
+function normalizeScoreRow(row: unknown[]) {
+  return row.map((item) => {
+    const score = typeof item === "number" ? item : Number(String(item).trim());
+    if (score !== 0 && score !== 1) throw new Error("分数数组只能包含 0 或 1。");
+    return score;
+  });
+}
+
+function findQualityMismatches(task: Task, results: ScoreResult[], matrix: number[][]): QualityMismatch[] {
+  const resultByUrl = new Map(results.map((result) => [result.url, result]));
+  return task.urls
+    .map((url, urlIndex) => {
+      const expected = matrix[urlIndex];
+      const result = resultByUrl.get(url);
+      if (!expected || !result) return null;
+      const rubricIndexes = expected
+        .map((score, rubricIndex) => (result.scores[rubricIndex] !== score ? rubricIndex : -1))
+        .filter((rubricIndex) => rubricIndex >= 0);
+      return rubricIndexes.length ? { url, urlIndex, rubricIndexes } : null;
+    })
+    .filter((item): item is QualityMismatch => Boolean(item));
+}
+
+function buildManualCheckHref(taskId: string, url: string, qualityTarget?: QualityMismatch) {
+  const params = new URLSearchParams({ url });
+  if (qualityTarget?.rubricIndexes.length) {
+    params.set("qaRubrics", qualityTarget.rubricIndexes.join(","));
+  }
+  return `/manual/${encodeURIComponent(taskId)}?${params.toString()}`;
+}
+
+function formatQualityRubrics(indexes: number[]) {
+  return indexes.map((index) => `R${index + 1}`).join(", ");
 }
 
 function StatusBadge({ status }: { status: TaskStatus }) {

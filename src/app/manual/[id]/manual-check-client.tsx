@@ -7,6 +7,7 @@ import type { ScoreResult, Task } from "@/lib/types";
 type ManualCheckClientProps = {
   taskId: string;
   url: string;
+  qaRubrics?: string;
 };
 
 type ManualDraft = {
@@ -55,7 +56,7 @@ const MANUAL_TARGET_FRAME_ALLOW = [
   "xr-spatial-tracking *",
 ].join("; ");
 
-export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
+export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckClientProps) {
   const [task, setTask] = useState<Task | null>(null);
   const [results, setResults] = useState<ScoreResult[]>([]);
   const [scores, setScores] = useState<number[]>([]);
@@ -70,6 +71,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const [allDoneFlash, setAllDoneFlash] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
+  const qualityRubricIndexes = useMemo(() => parseQualityRubricIndexes(qaRubrics), [qaRubrics]);
 
   useEffect(() => {
     async function load() {
@@ -91,13 +93,14 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       const nextScores = (useDraft ? draft?.scores : existing?.scores) ?? nextTask.rubrics.map(() => 0);
       const nextReasons = ensureReasonLength((useDraft ? draft?.reasons : existing?.reasons) ?? undefined, nextTask.rubrics.length);
       const nextAnsweredCount = useDraft || !existing ? firstUnansweredIndex(nextReasons, nextTask.rubrics.length) : nextTask.rubrics.length;
+      const firstQualityIndex = qualityRubricIndexes.find((index) => index < nextTask.rubrics.length);
 
       setTask(nextTask);
       setResults(resultData.results);
       setScores(nextScores);
       setReasons(nextReasons);
       setAnsweredCount(nextAnsweredCount);
-      setCurrentIndex(Math.min(nextAnsweredCount, nextTask.rubrics.length));
+      setCurrentIndex(firstQualityIndex ?? Math.min(nextAnsweredCount, nextTask.rubrics.length));
       if (useDraft && !existing) {
         if (nextTask.rubrics.length > 0 && nextAnsweredCount >= nextTask.rubrics.length) {
           void saveManualScore(nextScores, nextReasons);
@@ -107,7 +110,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     }
 
     load().catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
-  }, [taskId, url]);
+  }, [taskId, url, qualityRubricIndexes]);
 
   const completedCount = useMemo(() => reasons.filter((reason) => reason.trim()).length, [reasons]);
   const failReasonSuggestions = useMemo(() => {
@@ -356,6 +359,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                       "manual-score-dot",
                       done ? (score ? "pass" : "fail") : "todo",
                       currentIndex === index ? "active" : "",
+                      qualityRubricIndexes.includes(index) ? "quality-target-dot" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
@@ -537,3 +541,13 @@ function getSourceZipUrl(url: string) {
   }
 }
 
+function parseQualityRubricIndexes(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((item) => Number(item.trim()))
+        .filter((index) => Number.isInteger(index) && index >= 0),
+    ),
+  );
+}
