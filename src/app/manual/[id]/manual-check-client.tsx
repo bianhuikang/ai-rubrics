@@ -16,6 +16,45 @@ type ManualDraft = {
   updatedAt?: string;
 };
 
+const MANUAL_TARGET_FRAME_ALLOW = [
+  "accelerometer *",
+  "ambient-light-sensor *",
+  "autoplay *",
+  "camera *",
+  "clipboard-read *",
+  "clipboard-write *",
+  "compute-pressure *",
+  "display-capture *",
+  "document-domain *",
+  "encrypted-media *",
+  "execution-while-not-rendered *",
+  "execution-while-out-of-viewport *",
+  "fullscreen *",
+  "gamepad *",
+  "geolocation *",
+  "gyroscope *",
+  "hid *",
+  "identity-credentials-get *",
+  "idle-detection *",
+  "local-fonts *",
+  "magnetometer *",
+  "microphone *",
+  "midi *",
+  "otp-credentials *",
+  "payment *",
+  "picture-in-picture *",
+  "publickey-credentials-get *",
+  "screen-wake-lock *",
+  "serial *",
+  "speaker-selection *",
+  "storage-access *",
+  "sync-xhr *",
+  "usb *",
+  "web-share *",
+  "window-management *",
+  "xr-spatial-tracking *",
+].join("; ");
+
 export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const [task, setTask] = useState<Task | null>(null);
   const [results, setResults] = useState<ScoreResult[]>([]);
@@ -462,7 +501,13 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
         {allDoneFlash ? <div className="manual-complete-toast">恭喜，所有页面检查完成</div> : null}
       </aside>
 
-      <iframe className="manual-target-frame" src={url} title="manual target page" />
+      <iframe
+        allow={MANUAL_TARGET_FRAME_ALLOW}
+        allowFullScreen
+        className="manual-target-frame"
+        src={url}
+        title="manual target page"
+      />
     </main>
   );
 }
