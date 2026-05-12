@@ -509,6 +509,11 @@ export function Dashboard() {
 
   function openQualityLocator() {
     if (!activeTask) return;
+    if (qualityLocator?.taskId === activeTask.id) {
+      if (!window.confirm("确认结束当前任务的质检定位吗？红框提示会被清除。")) return;
+      clearQualityLocator();
+      return;
+    }
     setQualityScoreText(qualityLocator?.taskId === activeTask.id ? qualityLocator.inputText : "");
     setQualityLocatorOpen(true);
   }
@@ -736,8 +741,12 @@ export function Dashboard() {
             </div>
             {activeTask ? (
               <div className="actions">
-                <button onClick={openQualityLocator} disabled={!activeTask.rubrics.length}>
-                  质检定位
+                <button
+                  className={qualityLocator?.taskId === activeTask.id ? "quality-locator-active-button" : ""}
+                  onClick={openQualityLocator}
+                  disabled={!activeTask.rubrics.length}
+                >
+                  {qualityLocator?.taskId === activeTask.id ? "结束质检" : "质检定位"}
                 </button>
                 <button onClick={() => setRubricsReviewOpen(true)} disabled={!activeTask.rubrics.length}>
                   检查 Rubrics
@@ -745,12 +754,6 @@ export function Dashboard() {
                 <button onClick={rerunActiveTask} disabled={runningTaskIds.has(activeTask.id)}>
                   重跑
                 </button>
-                <a className="button-link" href={`/api/tasks/${activeTask.id}/export?format=json`} target="_blank" rel="noreferrer">
-                  JSON
-                </a>
-                <a className="button-link" href={`/api/tasks/${activeTask.id}/export?format=csv`}>
-                  CSV
-                </a>
               </div>
             ) : null}
           </div>

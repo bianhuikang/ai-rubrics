@@ -71,7 +71,21 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
   const [allDoneFlash, setAllDoneFlash] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
-  const qualityRubricIndexes = useMemo(() => parseQualityRubricIndexes(qaRubrics), [qaRubrics]);
+  const [qualityRubricIndexes, setQualityRubricIndexes] = useState<number[]>([]);
+
+  useEffect(() => {
+    function syncQualityLocator() {
+      const saved = window.localStorage.getItem(qualityLocatorStorageKey(taskId));
+      setQualityRubricIndexes(saved ? parseQualityRubricIndexes(qaRubrics) : []);
+    }
+
+    syncQualityLocator();
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === qualityLocatorStorageKey(taskId)) syncQualityLocator();
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [qaRubrics, taskId]);
 
   useEffect(() => {
     async function load() {
@@ -550,4 +564,8 @@ function parseQualityRubricIndexes(value: string) {
         .filter((index) => Number.isInteger(index) && index >= 0),
     ),
   );
+}
+
+function qualityLocatorStorageKey(taskId: string) {
+  return `ai-rubrics-quality-locator:${taskId}`;
 }
