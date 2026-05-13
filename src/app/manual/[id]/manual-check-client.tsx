@@ -17,6 +17,12 @@ type ManualDraft = {
   updatedAt?: string;
 };
 
+type QualityLocator = {
+  taskId: string;
+  inputText: string;
+  matrix: number[][];
+};
+
 const MANUAL_TARGET_FRAME_ALLOW = [
   "accelerometer *",
   "ambient-light-sensor *",
@@ -75,8 +81,11 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
 
   useEffect(() => {
     function syncQualityLocator() {
-      const saved = window.localStorage.getItem(qualityLocatorStorageKey(taskId));
-      setQualityRubricIndexes(saved ? parseQualityRubricIndexes(qaRubrics) : []);
+      if (!task) {
+        setQualityRubricIndexes(parseQualityRubricIndexes(qaRubrics));
+        return;
+      }
+      setQualityRubricIndexes(resolveQualityRubricIndexes(task, results, url, qaRubrics));
     }
 
     syncQualityLocator();
@@ -85,21 +94,36 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
     };
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
-  }, [qaRubrics, taskId]);
+  }, [qaRubrics, results, task, taskId, url]);
 
   useEffect(() => {
     async function load() {
-      const [taskResponse, resultsResponse, draftResponse] = await Promise.all([
+      if (!url) return;
+
+      const [taskResponse, resultsResponse] = await Promise.all([
         fetch(`/api/tasks/${taskId}`),
         fetch(`/api/tasks/${taskId}/results`),
-        fetch(`/api/tasks/${taskId}/manual-draft?url=${encodeURIComponent(url)}`),
       ]);
       if (!taskResponse.ok) throw new Error(await taskResponse.text());
       if (!resultsResponse.ok) throw new Error(await resultsResponse.text());
-      if (!draftResponse.ok) throw new Error(await draftResponse.text());
 
       const nextTask = (await taskResponse.json()) as Task;
       const resultData = (await resultsResponse.json()) as { results: ScoreResult[] };
+      if (!nextTask.urls.includes(url)) {
+        setTask(nextTask);
+        setResults(resultData.results);
+        setQualityRubricIndexes([]);
+        setScores([]);
+        setReasons([]);
+        setAnsweredCount(0);
+        setCurrentIndex(0);
+        setNotice("当前 URL 不属于这个任务，已停止手工检测。");
+        return;
+      }
+
+      const draftResponse = await fetch(`/api/tasks/${taskId}/manual-draft?url=${encodeURIComponent(url)}`);
+      if (!draftResponse.ok) throw new Error(await draftResponse.text());
+
       const draftData = (await draftResponse.json()) as { draft: ManualDraft | null };
       const existing = resultData.results.find((result) => result.url === url);
       const draft = draftData.draft;
@@ -107,10 +131,12 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
       const nextScores = (useDraft ? draft?.scores : existing?.scores) ?? nextTask.rubrics.map(() => 0);
       const nextReasons = ensureReasonLength((useDraft ? draft?.reasons : existing?.reasons) ?? undefined, nextTask.rubrics.length);
       const nextAnsweredCount = useDraft || !existing ? firstUnansweredIndex(nextReasons, nextTask.rubrics.length) : nextTask.rubrics.length;
-      const firstQualityIndex = qualityRubricIndexes.find((index) => index < nextTask.rubrics.length);
+      const nextQualityRubricIndexes = resolveQualityRubricIndexes(nextTask, resultData.results, url, qaRubrics);
+      const firstQualityIndex = nextQualityRubricIndexes.find((index) => index < nextTask.rubrics.length);
 
       setTask(nextTask);
       setResults(resultData.results);
+      setQualityRubricIndexes(nextQualityRubricIndexes);
       setScores(nextScores);
       setReasons(nextReasons);
       setAnsweredCount(nextAnsweredCount);
@@ -124,7 +150,7 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
     }
 
     load().catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
-  }, [taskId, url, qualityRubricIndexes]);
+  }, [qaRubrics, taskId, url]);
 
   const completedCount = useMemo(() => reasons.filter((reason) => reason.trim()).length, [reasons]);
   const failReasonSuggestions = useMemo(() => {
@@ -148,8 +174,15 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
   const scoreSummary = useMemo(() => {
     return `进度 ${completedCount}/${scores.length}`;
   }, [completedCount, scores.length]);
+  const pageSummary = useMemo(() => {
+    if (!task) return "";
+    const pageIndex = task.urls.findIndex((item) => item === url);
+    if (pageIndex < 0) return `第 ?/${task.urls.length} 个页面`;
+    return `第 ${pageIndex + 1}/${task.urls.length} 个页面`;
+  }, [task, url]);
 
   const currentRubric = task?.rubrics[currentIndex];
+  const currentRubricNeedsQualityCheck = qualityRubricIndexes.includes(currentIndex);
   const showFailReason = pendingPageFail || pendingFailIndex === currentIndex;
   const isComplete = Boolean(task?.rubrics.length && completedCount >= task.rubrics.length && currentIndex >= task.rubrics.length);
   const nextUrl = task ? findNextUrl(task.urls, url) : null;
@@ -173,7 +206,7 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
       if (nextPageUrl) {
         setNotice("已完成并保存，打开下一页...");
         window.setTimeout(() => {
-          window.location.href = `/manual/${encodeURIComponent(taskId)}?url=${encodeURIComponent(nextPageUrl)}`;
+          window.location.href = buildManualCheckHref(data.task, data.results, taskId, nextPageUrl);
         }, 350);
       } else {
         setNotice("恭喜，所有页面检查完成");
@@ -347,6 +380,18 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
     return <main className="manual-page-error">缺少 URL。</main>;
   }
 
+  if (!task) {
+    return <main className="manual-page-error">{notice || "加载任务..."}</main>;
+  }
+
+  if (task && !task.urls.includes(url)) {
+    return (
+      <main className="manual-page-error">
+        当前 URL 不属于任务 {task.id}，已停止手工检测。
+      </main>
+    );
+  }
+
   return (
     <main className="manual-check-page">
       <aside className={`manual-check-bar ${showFailReason ? "with-fail-reason" : ""} ${allDoneFlash ? "all-done-flash" : ""}`}>
@@ -359,6 +404,7 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
               </a>
             ) : null}
           </div>
+          {pageSummary ? <em>{pageSummary}</em> : null}
           <span title={taskId}>{taskId}</span>
           <em>{scoreSummary}</em>
           {task?.rubrics.length ? (
@@ -391,7 +437,15 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
 
         <div className={`manual-rubrics ${showFailReason ? "with-fail-reason" : ""}`}>
           {currentRubric ? (
-            <div className={`manual-rubric-focus ${pendingFailIndex === currentIndex || pendingPageFail ? "with-reason" : ""}`}>
+            <div
+              className={[
+                "manual-rubric-focus",
+                pendingFailIndex === currentIndex || pendingPageFail ? "with-reason" : "",
+                currentRubricNeedsQualityCheck ? "quality-target-rubric" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
               <p>
                 {pendingPageFail ? (
                   "当前页面全部不符合"
@@ -496,7 +550,8 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
                   <button
                     className="manual-rubric-toggle"
                     onClick={() => {
-                      window.location.href = `/manual/${encodeURIComponent(taskId)}?url=${encodeURIComponent(nextUrl)}`;
+                      if (!task) return;
+                      window.location.href = buildManualCheckHref(task, results, taskId, nextUrl);
                     }}
                     disabled={saving}
                     type="button"
@@ -543,6 +598,53 @@ function findNextUrl(urls: string[], currentUrl: string) {
   const currentIndex = urls.findIndex((item) => item === currentUrl);
   if (currentIndex < 0) return null;
   return urls[currentIndex + 1] ?? null;
+}
+
+function buildManualCheckHref(task: Task, results: ScoreResult[], taskId: string, targetUrl: string) {
+  const params = new URLSearchParams({ url: targetUrl });
+  const qualityIndexes = resolveQualityRubricIndexes(task, results, targetUrl, "");
+  if (qualityIndexes.length) params.set("qaRubrics", qualityIndexes.join(","));
+  return `/manual/${encodeURIComponent(taskId)}?${params.toString()}`;
+}
+
+function resolveQualityRubricIndexes(task: Task, results: ScoreResult[], targetUrl: string, fallbackQaRubrics: string) {
+  const locator = readQualityLocator(task.id);
+  const targetUrlIndex = task.urls.findIndex((item) => item === targetUrl);
+  const result = results.find((item) => item.url === targetUrl);
+
+  if (targetUrlIndex < 0) return [];
+
+  if (!locator || !result || !isQualityMatrixForTask(locator.matrix, task)) {
+    return parseQualityRubricIndexes(fallbackQaRubrics).filter((index) => index < task.rubrics.length);
+  }
+
+  return locator.matrix[targetUrlIndex]
+    .map((score, rubricIndex) => (result.scores[rubricIndex] !== score ? rubricIndex : -1))
+    .filter((rubricIndex) => rubricIndex >= 0);
+}
+
+function readQualityLocator(taskId: string): QualityLocator | null {
+  if (typeof window === "undefined") return null;
+  const saved = window.localStorage.getItem(qualityLocatorStorageKey(taskId));
+  if (!saved) return null;
+
+  try {
+    const parsed = JSON.parse(saved) as Partial<QualityLocator>;
+    if (parsed.taskId !== taskId || !Array.isArray(parsed.matrix)) return null;
+    const matrix = parsed.matrix;
+    if (!matrix.every((row) => Array.isArray(row) && row.every((score) => score === 0 || score === 1))) return null;
+    return {
+      taskId,
+      inputText: typeof parsed.inputText === "string" ? parsed.inputText : "",
+      matrix,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isQualityMatrixForTask(matrix: number[][], task: Task) {
+  return matrix.length === task.urls.length && matrix.every((row) => row.length === task.rubrics.length);
 }
 
 function getSourceZipUrl(url: string) {

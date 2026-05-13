@@ -765,6 +765,7 @@ export function Dashboard() {
               totals={activeTotals}
               logs={taskLogs}
               qualityTargets={activeQualityTargets}
+              qualityMatrix={qualityLocator?.taskId === activeTask.id ? qualityLocator.matrix : null}
               onRubricsUpdated={(updatedTask, updatedResults) => {
                 setTasks((current) => current.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
                 setActiveTask((current) => (current?.id === updatedTask.id ? updatedTask : current));
@@ -966,6 +967,7 @@ function ResultView({
   totals,
   logs,
   qualityTargets,
+  qualityMatrix,
   onRubricsUpdated,
 }: {
   task: Task;
@@ -973,27 +975,28 @@ function ResultView({
   totals: Array<{ url: string; total: number; max: number }>;
   logs: TaskLog[];
   qualityTargets: QualityMismatch[];
+  qualityMatrix: number[][] | null;
   onRubricsUpdated: (task: Task, results: ScoreResult[]) => void;
 }) {
-  const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => rubric.description));
+  const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
   const [rubricBusy, setRubricBusy] = useState<number | null>(null);
   const [rubricError, setRubricError] = useState("");
   const [rubricDirty, setRubricDirty] = useState(false);
 
   useEffect(() => {
-    setRubricDrafts(task.rubrics.map((rubric) => rubric.description));
+    setRubricDrafts(task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
     setRubricError("");
     setRubricDirty(false);
   }, [task.id]);
 
   useEffect(() => {
     if (rubricDirty) return;
-    setRubricDrafts(task.rubrics.map((rubric) => rubric.description));
+    setRubricDrafts(task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
     setRubricError("");
   }, [task.rubrics, rubricDirty]);
 
   const rubricsCopyText = task.rubrics
-    .map((rubric, index) => `${index + 1}. ${rubric.description.trim()}`)
+    .map((rubric, index) => `${index + 1}. ${stripRubricNumberPrefix(rubric.description)}`)
     .join("\n");
   const orderedResults = task.urls
     .map((url) => results.find((result) => result.url === url))
@@ -1010,7 +1013,7 @@ function ResultView({
     const rubrics = nextDescriptions.map((description, index) => ({
       id: `R${index + 1}`,
       name: task.rubrics[index]?.name || `规则 ${index + 1}`,
-      description: description.trim(),
+      description: stripRubricNumberPrefix(description),
       evidenceHints: task.rubrics[index]?.evidenceHints || [],
     }));
     const response = await fetch(`/api/tasks/${task.id}/rubrics`, {
@@ -1021,13 +1024,13 @@ function ResultView({
     const data = (await response.json()) as { task?: Task; results?: ScoreResult[]; error?: string };
     if (!response.ok || !data.task || !data.results) throw new Error(data.error || "Rubrics 保存失败");
     onRubricsUpdated(data.task, data.results);
-    setRubricDrafts(data.task.rubrics.map((rubric) => rubric.description));
+    setRubricDrafts(data.task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
     setRubricDirty(false);
     setRubricError("");
   }
 
   async function saveRubric(index: number) {
-    const value = rubricDrafts[index]?.trim();
+    const value = stripRubricNumberPrefix(rubricDrafts[index] ?? "");
     if (!value) {
       setRubricError("Rubric 不能为空。");
       return;
@@ -1078,8 +1081,9 @@ function ResultView({
         <ol className="rubric-list editable-rubric-list">
           {task.rubrics.map((rubric, index) => (
             <li key={rubric.id}>
+              <span className="rubric-index-label">{index + 1}.</span>
               <input
-                value={rubricDrafts[index] ?? rubric.description}
+                value={rubricDrafts[index] ?? stripRubricNumberPrefix(rubric.description)}
                 onChange={(event) =>
                   {
                     setRubricDirty(true);
@@ -1129,9 +1133,10 @@ function ResultView({
               const result = results.find((item) => item.url === url);
               const progress = result ? task.rubrics.length : 0;
               const qualityTarget = qualityTargetByUrl.get(url);
+              const qualityScores = qualityMatrix?.[index];
               const manualCheckHref = buildManualCheckHref(task.id, url, qualityTarget);
               return (
-                <li key={url} className={qualityTarget ? "quality-target-item" : ""}>
+                <li key={url}>
                   <a href={url} target="_blank" rel="noreferrer" title={url}>
                     {index + 1}. {urlTail(url)}
                   </a>
@@ -1145,7 +1150,7 @@ function ResultView({
                   >
                     {index === 0 ? "手动检查(请从这里开始)" : "手动检查"}
                   </a>
-                  <code className="manual-score-array">{result ? JSON.stringify(result.scores) : "[]"}</code>
+                  <ScoreArrayDisplay scores={result?.scores} qualityScores={qualityScores} qualityIndexes={qualityTarget?.rubricIndexes ?? []} />
                 </li>
               );
             })}
@@ -1210,7 +1215,7 @@ function ResultView({
                 const total = totals.find((item) => item.url === result.url);
                 const qualityTarget = qualityTargetByUrl.get(result.url);
                 return (
-                  <tr key={result.id} className={qualityTarget ? "quality-target-row" : ""}>
+                  <tr key={result.id}>
                     <td className="col-index">{index + 1}</td>
                     <td className="col-url">
                       <a href={result.url} target="_blank" rel="noreferrer" title={result.url}>
@@ -1284,6 +1289,56 @@ function ProcessPanel({
   );
 }
 
+function ScoreArrayDisplay({
+  scores,
+  qualityScores,
+  qualityIndexes,
+}: {
+  scores?: number[];
+  qualityScores?: number[];
+  qualityIndexes: number[];
+}) {
+  if (!scores) return <code className="manual-score-array">[]</code>;
+  const qualityIndexSet = new Set(qualityIndexes);
+  const scoreCount = Math.max(scores.length, qualityScores?.length ?? 0);
+  const gridStyle = { gridTemplateColumns: `34px 8px repeat(${scoreCount}, 18px) 8px` };
+  return (
+    <code className="manual-score-array" style={gridStyle}>
+      <ScoreArrayRow label="评分" scores={scores} scoreCount={scoreCount} qualityIndexSet={qualityIndexSet} />
+      {qualityScores ? <ScoreArrayRow label="质检" scores={qualityScores} scoreCount={scoreCount} qualityIndexSet={qualityIndexSet} /> : null}
+    </code>
+  );
+}
+
+function ScoreArrayRow({
+  label,
+  scores,
+  scoreCount,
+  qualityIndexSet,
+}: {
+  label: string;
+  scores: number[];
+  scoreCount: number;
+  qualityIndexSet: Set<number>;
+}) {
+  return (
+    <>
+      <span className="score-array-label">{label}</span>
+      <span>[</span>
+      {Array.from({ length: scoreCount }, (_item, index) => {
+        const score = scores[index];
+        return (
+          <span key={index} className={qualityIndexSet.has(index) ? "quality-target-score" : ""}>
+            {score ?? ""}
+            {index < scoreCount - 1 ? "," : ""}
+          </span>
+        );
+      })}
+      <span>]</span>
+    </>
+  );
+}
+
 async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
@@ -1298,12 +1353,14 @@ function parseQualityScoreMatrix(value: string, task: Task) {
 
   const parsed = parseScoreMatrixInput(text);
   if (!parsed.length) throw new Error("没有识别到分数数组。");
-  if (parsed.length > task.urls.length) throw new Error(`分数数组有 ${parsed.length} 行，当前任务只有 ${task.urls.length} 个页面。`);
+  if (parsed.length !== task.urls.length) {
+    throw new Error(`质检分数数组需要 ${task.urls.length} 行，对应当前任务的 ${task.urls.length} 个页面。`);
+  }
 
   parsed.forEach((row, rowIndex) => {
     if (!row.length) throw new Error(`第 ${rowIndex + 1} 行为空。`);
-    if (row.length > task.rubrics.length) {
-      throw new Error(`第 ${rowIndex + 1} 行有 ${row.length} 列，当前任务只有 ${task.rubrics.length} 条 Rubric。`);
+    if (row.length !== task.rubrics.length) {
+      throw new Error(`质检分数数组第 ${rowIndex + 1} 行需要 ${task.rubrics.length} 列，对应当前任务的 ${task.rubrics.length} 条 Rubric。`);
     }
   });
 
