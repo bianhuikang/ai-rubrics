@@ -1276,6 +1276,7 @@ summary {
 }
 
 .manual-rubric-focus p {
+  transform: translateY(5px);
   margin: 0;
   color: var(--text);
   font-size: 18px;
@@ -1300,6 +1301,7 @@ summary {
   gap: 8px;
   justify-content: flex-end;
   width: 250px;
+  transform: translateY(5px);
 }
 
 .manual-fail-reason {
@@ -1308,6 +1310,7 @@ summary {
   gap: 6px;
   width: 390px;
   align-content: start;
+  transform: translateY(5px);
 }
 
 .manual-fail-reason-field {
