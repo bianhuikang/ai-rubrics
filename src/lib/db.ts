@@ -73,6 +73,9 @@ export function getDb() {
         rubrics TEXT NOT NULL,
         rubricsSource TEXT NOT NULL DEFAULT 'none',
         rubricsModified INTEGER NOT NULL DEFAULT 0,
+        qualityMode INTEGER NOT NULL DEFAULT 0,
+        qualityScoreText TEXT NOT NULL DEFAULT '',
+        qualityMatrix TEXT NOT NULL DEFAULT '[]',
         mode TEXT NOT NULL DEFAULT 'manual',
         status TEXT NOT NULL,
         error TEXT,
@@ -148,6 +151,15 @@ export function getDb() {
     }
     if (!taskColumns.some((column) => column.name === "rubricsModified")) {
       db.exec("ALTER TABLE tasks ADD COLUMN rubricsModified INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityMode")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityMode INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityScoreText")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityScoreText TEXT NOT NULL DEFAULT ''");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityMatrix")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityMatrix TEXT NOT NULL DEFAULT '[]'");
     }
 
     const existing = db.prepare("SELECT id FROM settings WHERE id = 1").get();
@@ -450,7 +462,17 @@ export function getTask(id: string): Task | null {
   return row ? rowToTask(row) : null;
 }
 
-export function createTask(input: { id?: string; name?: string; prompt: string; urls: string[]; rubrics?: Task["rubrics"]; mode?: TaskMode }): Task {
+export function createTask(input: {
+  id?: string;
+  name?: string;
+  prompt: string;
+  urls: string[];
+  rubrics?: Task["rubrics"];
+  mode?: TaskMode;
+  qualityMode?: boolean;
+  qualityScoreText?: string;
+  qualityMatrix?: number[][];
+}): Task {
   const id = input.id?.trim() || crypto.randomUUID();
   const existing = getTask(id);
   if (existing) throw new Error(`Task ${id} already exists`);
@@ -459,8 +481,8 @@ export function createTask(input: { id?: string; name?: string; prompt: string; 
   const rubricsSource = rubrics.length ? "user" : "none";
   getDb()
     .prepare(`
-      INSERT INTO tasks (id, name, prompt, urls, rubrics, rubricsSource, mode, status, error, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      INSERT INTO tasks (id, name, prompt, urls, rubrics, rubricsSource, qualityMode, qualityScoreText, qualityMatrix, mode, status, error, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
     `)
     .run(
       id,
@@ -469,6 +491,9 @@ export function createTask(input: { id?: string; name?: string; prompt: string; 
       JSON.stringify(input.urls),
       JSON.stringify(rubrics),
       rubricsSource,
+      input.qualityMode ? 1 : 0,
+      input.qualityScoreText ?? "",
+      JSON.stringify(input.qualityMatrix ?? []),
       input.mode ?? "manual",
       "queued",
       timestamp,
@@ -479,7 +504,11 @@ export function createTask(input: { id?: string; name?: string; prompt: string; 
 
 export function updateTask(
   id: string,
-  patch: Partial<Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "rubricsSource" | "rubricsModified" | "mode" | "error">> & { status?: TaskStatus },
+  patch: Partial<
+    Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "rubricsSource" | "rubricsModified" | "qualityMode" | "qualityScoreText" | "qualityMatrix" | "mode" | "error">
+  > & {
+    status?: TaskStatus;
+  },
 ): Task {
   const task = getTask(id);
   if (!task) throw new Error("Task not found");
@@ -487,7 +516,7 @@ export function updateTask(
   getDb()
     .prepare(`
       UPDATE tasks
-      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, rubricsModified = ?, mode = ?, status = ?, error = ?, updatedAt = ?
+      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, rubricsModified = ?, qualityMode = ?, qualityScoreText = ?, qualityMatrix = ?, mode = ?, status = ?, error = ?, updatedAt = ?
       WHERE id = ?
     `)
     .run(
@@ -497,6 +526,9 @@ export function updateTask(
       JSON.stringify(next.rubrics),
       next.rubricsSource,
       next.rubricsModified ? 1 : 0,
+      next.qualityMode ? 1 : 0,
+      next.qualityScoreText,
+      JSON.stringify(next.qualityMatrix),
       next.mode,
       next.status,
       next.error ?? null,
@@ -706,6 +738,9 @@ function rowToTask(row: Record<string, unknown>): Task {
       ? (String(row.rubricsSource) as Task["rubricsSource"])
       : "generated",
     rubricsModified: Number(row.rubricsModified ?? 0) === 1,
+    qualityMode: Number(row.qualityMode ?? 0) === 1,
+    qualityScoreText: String(row.qualityScoreText ?? ""),
+    qualityMatrix: parseJson<number[][]>(String(row.qualityMatrix ?? "[]"), []),
     mode: ["auto", "manual"].includes(String(row.mode)) ? (String(row.mode) as TaskMode) : "manual",
     status: String(row.status) as TaskStatus,
     error: row.error ? String(row.error) : undefined,

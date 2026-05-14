@@ -9,6 +9,9 @@ const updateSchema = z.object({
   prompt: z.string().optional(),
   urls: z.array(z.string().url()).min(1).optional(),
   mode: z.enum(["auto", "manual"]).optional(),
+  qualityMode: z.boolean().optional(),
+  qualityScoreText: z.string().optional(),
+  qualityMatrix: z.array(z.array(z.number().int().min(0).max(1))).optional(),
   rubrics: z
     .array(
       z.object({

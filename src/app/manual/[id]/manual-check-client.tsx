@@ -7,7 +7,6 @@ import type { ScoreResult, Task } from "@/lib/types";
 type ManualCheckClientProps = {
   taskId: string;
   url: string;
-  qaRubrics?: string;
 };
 
 type ManualDraft = {
@@ -15,12 +14,6 @@ type ManualDraft = {
   reasons: string[];
   answeredCount: number;
   updatedAt?: string;
-};
-
-type QualityLocator = {
-  taskId: string;
-  inputText: string;
-  matrix: number[][];
 };
 
 const MANUAL_TARGET_FRAME_ALLOW = [
@@ -62,7 +55,7 @@ const MANUAL_TARGET_FRAME_ALLOW = [
   "xr-spatial-tracking *",
 ].join("; ");
 
-export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckClientProps) {
+export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const [task, setTask] = useState<Task | null>(null);
   const [results, setResults] = useState<ScoreResult[]>([]);
   const [scores, setScores] = useState<number[]>([]);
@@ -80,21 +73,12 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
   const [qualityRubricIndexes, setQualityRubricIndexes] = useState<number[]>([]);
 
   useEffect(() => {
-    function syncQualityLocator() {
-      if (!task) {
-        setQualityRubricIndexes(parseQualityRubricIndexes(qaRubrics));
-        return;
-      }
-      setQualityRubricIndexes(resolveQualityRubricIndexes(task, results, url, qaRubrics));
+    if (!task?.qualityMode) {
+      setQualityRubricIndexes([]);
+      return;
     }
-
-    syncQualityLocator();
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === qualityLocatorStorageKey(taskId)) syncQualityLocator();
-    };
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
-  }, [qaRubrics, results, task, taskId, url]);
+    setQualityRubricIndexes(resolveQualityRubricIndexes(task, results, url));
+  }, [results, task, url]);
 
   useEffect(() => {
     async function load() {
@@ -131,7 +115,7 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
       const nextScores = (useDraft ? draft?.scores : existing?.scores) ?? nextTask.rubrics.map(() => 0);
       const nextReasons = ensureReasonLength((useDraft ? draft?.reasons : existing?.reasons) ?? undefined, nextTask.rubrics.length);
       const nextAnsweredCount = useDraft || !existing ? firstUnansweredIndex(nextReasons, nextTask.rubrics.length) : nextTask.rubrics.length;
-      const nextQualityRubricIndexes = resolveQualityRubricIndexes(nextTask, resultData.results, url, qaRubrics);
+      const nextQualityRubricIndexes = nextTask.qualityMode ? resolveQualityRubricIndexes(nextTask, resultData.results, url) : [];
       const firstQualityIndex = nextQualityRubricIndexes.find((index) => index < nextTask.rubrics.length);
 
       setTask(nextTask);
@@ -150,7 +134,7 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
     }
 
     load().catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
-  }, [qaRubrics, taskId, url]);
+  }, [taskId, url]);
 
   const completedCount = useMemo(() => reasons.filter((reason) => reason.trim()).length, [reasons]);
   const failReasonSuggestions = useMemo(() => {
@@ -205,8 +189,8 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
       const nextPageUrl = findNextUrl(data.task.urls, url);
       if (nextPageUrl) {
         setNotice("已完成并保存，打开下一页...");
-        window.setTimeout(() => {
-          window.location.href = buildManualCheckHref(data.task, data.results, taskId, nextPageUrl);
+          window.setTimeout(() => {
+          window.location.href = buildManualCheckHref(data.task, nextPageUrl);
         }, 350);
       } else {
         setNotice("恭喜，所有页面检查完成");
@@ -551,7 +535,7 @@ export function ManualCheckClient({ taskId, url, qaRubrics = "" }: ManualCheckCl
                     className="manual-rubric-toggle"
                     onClick={() => {
                       if (!task) return;
-                      window.location.href = buildManualCheckHref(task, results, taskId, nextUrl);
+                      window.location.href = buildManualCheckHref(task, nextUrl);
                     }}
                     disabled={saving}
                     type="button"
@@ -600,47 +584,22 @@ function findNextUrl(urls: string[], currentUrl: string) {
   return urls[currentIndex + 1] ?? null;
 }
 
-function buildManualCheckHref(task: Task, results: ScoreResult[], taskId: string, targetUrl: string) {
+function buildManualCheckHref(task: Task, targetUrl: string) {
   const params = new URLSearchParams({ url: targetUrl });
-  const qualityIndexes = resolveQualityRubricIndexes(task, results, targetUrl, "");
-  if (qualityIndexes.length) params.set("qaRubrics", qualityIndexes.join(","));
-  return `/manual/${encodeURIComponent(taskId)}?${params.toString()}`;
+  return `/manual/${encodeURIComponent(task.id)}?${params.toString()}`;
 }
 
-function resolveQualityRubricIndexes(task: Task, results: ScoreResult[], targetUrl: string, fallbackQaRubrics: string) {
-  const locator = readQualityLocator(task.id);
+function resolveQualityRubricIndexes(task: Task, results: ScoreResult[], targetUrl: string) {
   const targetUrlIndex = task.urls.findIndex((item) => item === targetUrl);
   const result = results.find((item) => item.url === targetUrl);
 
   if (targetUrlIndex < 0) return [];
 
-  if (!locator || !result || !isQualityMatrixForTask(locator.matrix, task)) {
-    return parseQualityRubricIndexes(fallbackQaRubrics).filter((index) => index < task.rubrics.length);
-  }
+  if (!result || !isQualityMatrixForTask(task.qualityMatrix, task)) return [];
 
-  return locator.matrix[targetUrlIndex]
+  return task.qualityMatrix[targetUrlIndex]
     .map((score, rubricIndex) => (result.scores[rubricIndex] !== score ? rubricIndex : -1))
     .filter((rubricIndex) => rubricIndex >= 0);
-}
-
-function readQualityLocator(taskId: string): QualityLocator | null {
-  if (typeof window === "undefined") return null;
-  const saved = window.localStorage.getItem(qualityLocatorStorageKey(taskId));
-  if (!saved) return null;
-
-  try {
-    const parsed = JSON.parse(saved) as Partial<QualityLocator>;
-    if (parsed.taskId !== taskId || !Array.isArray(parsed.matrix)) return null;
-    const matrix = parsed.matrix;
-    if (!matrix.every((row) => Array.isArray(row) && row.every((score) => score === 0 || score === 1))) return null;
-    return {
-      taskId,
-      inputText: typeof parsed.inputText === "string" ? parsed.inputText : "",
-      matrix,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function isQualityMatrixForTask(matrix: number[][], task: Task) {
@@ -657,17 +616,3 @@ function getSourceZipUrl(url: string) {
   }
 }
 
-function parseQualityRubricIndexes(value: string) {
-  return Array.from(
-    new Set(
-      value
-        .split(",")
-        .map((item) => Number(item.trim()))
-        .filter((index) => Number.isInteger(index) && index >= 0),
-    ),
-  );
-}
-
-function qualityLocatorStorageKey(taskId: string) {
-  return `ai-rubrics-quality-locator:${taskId}`;
-}

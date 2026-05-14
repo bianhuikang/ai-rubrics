@@ -34,16 +34,16 @@ type ParsedCaseRow = {
   rubricsText: string;
 };
 
+type BatchCreateResponse = {
+  createdTasks: Task[];
+  duplicateIds: string[];
+  errors: Array<{ id: string; message: string }>;
+};
+
 type QualityMismatch = {
   url: string;
   urlIndex: number;
   rubricIndexes: number[];
-};
-
-type QualityLocator = {
-  taskId: string;
-  inputText: string;
-  matrix: number[][];
 };
 
 const runningStatuses: TaskStatus[] = ["queued", "generating-rubrics", "scoring"];
@@ -67,7 +67,6 @@ export function Dashboard() {
   const [rubricsReviewOpen, setRubricsReviewOpen] = useState(false);
   const [qualityLocatorOpen, setQualityLocatorOpen] = useState(false);
   const [qualityScoreText, setQualityScoreText] = useState("");
-  const [qualityLocator, setQualityLocator] = useState<QualityLocator | null>(null);
   const [taskId, setTaskId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [urlsText, setUrlsText] = useState("");
@@ -90,30 +89,8 @@ export function Dashboard() {
   }, [activeTask?.id]);
 
   useEffect(() => {
-    if (!activeTask) {
-      setQualityLocator(null);
-      setQualityScoreText("");
-      return;
-    }
-
-    const saved = window.localStorage.getItem(qualityLocatorStorageKey(activeTask.id));
-    if (!saved) {
-      setQualityLocator(null);
-      setQualityScoreText("");
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(saved) as QualityLocator;
-      if (parsed.taskId !== activeTask.id || !Array.isArray(parsed.matrix)) throw new Error("Invalid quality locator");
-      setQualityLocator(parsed);
-      setQualityScoreText(parsed.inputText);
-    } catch {
-      window.localStorage.removeItem(qualityLocatorStorageKey(activeTask.id));
-      setQualityLocator(null);
-      setQualityScoreText("");
-    }
-  }, [activeTask?.id]);
+    setQualityScoreText(activeTask?.qualityScoreText ?? "");
+  }, [activeTask?.id, activeTask?.qualityScoreText]);
 
   useEffect(() => {
     const shouldPoll = runningTaskIds.size > 0;
@@ -206,9 +183,9 @@ export function Dashboard() {
   }, [activeTask?.rubrics.length, results]);
 
   const activeQualityTargets = useMemo(() => {
-    if (!activeTask || qualityLocator?.taskId !== activeTask.id) return [];
-    return findQualityMismatches(activeTask, results, qualityLocator.matrix);
-  }, [activeTask, qualityLocator, results]);
+    if (!activeTask || !activeTask.qualityMode) return [];
+    return findQualityMismatches(activeTask, results, activeTask.qualityMatrix);
+  }, [activeTask, results]);
 
   const taskStats = useMemo(() => {
     const completed = tasks.filter((task) => task.status === "scored").length;
@@ -394,43 +371,58 @@ export function Dashboard() {
   async function createParsedCaseTasks(parsedRows: ParsedCaseRow[]) {
     try {
       setBusy("batch-create");
-      const existingIds = new Set(tasks.map((task) => task.id));
-      const seenIds = new Set<string>();
-      const uniqueRows = parsedRows.filter((row) => {
-        const id = row.id.trim();
-        if (!id || existingIds.has(id) || seenIds.has(id)) return false;
-        seenIds.add(id);
-        return true;
-      });
-      const skippedCount = parsedRows.length - uniqueRows.length;
-      if (!uniqueRows.length) {
-        setNotice({ kind: "info", text: `没有创建新任务，已跳过 ${skippedCount} 个重复任务 ID。` });
+      const tasksToCreate: Array<{
+        id: string;
+        prompt: string;
+        urls: string[];
+        rubrics: Rubric[];
+        mode: "auto" | "manual";
+        skipIfExists: true;
+      }> = [];
+      const localErrors: Array<{ id: string; message: string }> = [];
+      let missingIdCount = 0;
+
+      for (const parsed of parsedRows) {
+        const id = parsed.id.trim();
+        if (!id) {
+          missingIdCount += 1;
+          continue;
+        }
+
+        try {
+          tasksToCreate.push({
+            id,
+            prompt: parsed.prompt,
+            urls: parseUrls(parsed.urlsText),
+            rubrics: parseRubricsInput(parsed.rubricsText),
+            mode: manualMode ? "manual" : "auto",
+            skipIfExists: true,
+          });
+        } catch (error) {
+          localErrors.push({
+            id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      if (!tasksToCreate.length) {
+        const invalidCount = localErrors.length + missingIdCount;
+        setNotice({ kind: "info", text: `没有可创建的任务，已跳过 ${invalidCount} 条。` });
         return;
       }
 
-      setNotice({ kind: "info", text: `正在批量创建 ${uniqueRows.length} 个任务${skippedCount ? `，跳过 ${skippedCount} 个重复ID` : ""}...` });
-      const createdTasks: Task[] = [];
-      const errors: string[] = [];
-      for (const parsed of uniqueRows) {
-        try {
-          const response = await fetch("/api/tasks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              id: parsed.id || undefined,
-              prompt: parsed.prompt,
-              urls: parseUrls(parsed.urlsText),
-              rubrics: parseRubricsInput(parsed.rubricsText),
-              mode: manualMode ? "manual" : "auto",
-            }),
-          });
-          if (!response.ok) throw new Error(await response.text());
-          const task = (await response.json()) as Task;
-          createdTasks.push(task);
-        } catch (error) {
-          errors.push(`${parsed.id}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
+      setNotice({ kind: "info", text: `正在批量创建 ${tasksToCreate.length} 个任务...` });
+
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tasks: tasksToCreate }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as BatchCreateResponse;
+      const createdTasks = data.createdTasks;
+      const errors = [...localErrors, ...data.errors];
 
       if (createdTasks.length) {
         setTasks((current) => [...createdTasks, ...current]);
@@ -440,13 +432,36 @@ export function Dashboard() {
         createdTasks.forEach((task) => void runTask(task.id));
       }
 
+      const alertSections: string[] = [];
+      if (data.duplicateIds.length) {
+        alertSections.push(`这些任务重复未创建：\n${data.duplicateIds.join("\n")}`);
+      }
+      if (createdTasks.length) {
+        alertSections.push(`这些任务创建成功：\n${createdTasks.map((task) => task.id).join("\n")}`);
+      }
+      if (missingIdCount) {
+        alertSections.push(`有 ${missingIdCount} 条缺少任务 ID，未创建。`);
+      }
       if (errors.length) {
-        setNotice({
-          kind: createdTasks.length ? "info" : "error",
-          text: `已创建 ${createdTasks.length} 个，跳过 ${skippedCount} 个重复ID，失败 ${errors.length} 个：${errors.slice(0, 2).join("；")}`,
-        });
+        alertSections.push(
+          `这些任务创建失败：\n${errors.map((item) => `${item.id || "(无ID)"}: ${item.message}`).join("\n")}`,
+        );
+      }
+      if (alertSections.length) {
+        window.alert(alertSections.join("\n\n"));
+      }
+
+      const summaryParts = [`已创建 ${createdTasks.length} 个任务`];
+      if (data.duplicateIds.length) summaryParts.push(`重复未创建 ${data.duplicateIds.length} 个`);
+      if (missingIdCount) summaryParts.push(`缺少ID ${missingIdCount} 个`);
+      if (errors.length) summaryParts.push(`失败 ${errors.length} 个`);
+
+      const hasNonCreated = data.duplicateIds.length > 0 || missingIdCount > 0 || errors.length > 0;
+
+      if (errors.length) {
+        setNotice({ kind: createdTasks.length ? "info" : "error", text: `${summaryParts.join("，")}。` });
       } else {
-        setNotice({ kind: "success", text: `已批量创建 ${createdTasks.length} 个任务${skippedCount ? `，跳过 ${skippedCount} 个重复ID` : ""}。` });
+        setNotice({ kind: hasNonCreated ? "info" : "success", text: `${summaryParts.join("，")}。` });
       }
     } finally {
       setBusy(null);
@@ -507,29 +522,43 @@ export function Dashboard() {
     void runTask(activeTask.id);
   }
 
+  async function updateTaskQualityState(
+    taskId: string,
+    patch: Pick<Task, "qualityMode" | "qualityScoreText" | "qualityMatrix">,
+  ) {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const updated = (await response.json()) as Task;
+    setTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)));
+    setActiveTask((current) => (current?.id === updated.id ? updated : current));
+    return updated;
+  }
+
   function openQualityLocator() {
     if (!activeTask) return;
-    if (qualityLocator?.taskId === activeTask.id) {
+    if (activeTask.qualityMode) {
       if (!window.confirm("确认结束当前任务的质检定位吗？红框提示会被清除。")) return;
-      clearQualityLocator();
+      void clearQualityLocator();
       return;
     }
-    setQualityScoreText(qualityLocator?.taskId === activeTask.id ? qualityLocator.inputText : "");
+    setQualityScoreText(activeTask.qualityScoreText ?? "");
     setQualityLocatorOpen(true);
   }
 
-  function saveQualityLocator() {
+  async function saveQualityLocator() {
     if (!activeTask) return;
     try {
       const matrix = parseQualityScoreMatrix(qualityScoreText, activeTask);
-      const locator: QualityLocator = {
-        taskId: activeTask.id,
-        inputText: qualityScoreText,
-        matrix,
-      };
       const mismatches = findQualityMismatches(activeTask, results, matrix);
-      window.localStorage.setItem(qualityLocatorStorageKey(activeTask.id), JSON.stringify(locator));
-      setQualityLocator(locator);
+      await updateTaskQualityState(activeTask.id, {
+        qualityMode: true,
+        qualityScoreText,
+        qualityMatrix: matrix,
+      });
       setQualityLocatorOpen(false);
       setNotice({
         kind: mismatches.length ? "success" : "info",
@@ -542,9 +571,13 @@ export function Dashboard() {
     }
   }
 
-  function clearQualityLocator() {
-    if (activeTask) window.localStorage.removeItem(qualityLocatorStorageKey(activeTask.id));
-    setQualityLocator(null);
+  async function clearQualityLocator() {
+    if (!activeTask) return;
+    await updateTaskQualityState(activeTask.id, {
+      qualityMode: false,
+      qualityScoreText: "",
+      qualityMatrix: [],
+    });
     setQualityScoreText("");
     setQualityLocatorOpen(false);
     setNotice({ kind: "info", text: "已清除质检定位。" });
@@ -742,11 +775,11 @@ export function Dashboard() {
             {activeTask ? (
               <div className="actions">
                 <button
-                  className={qualityLocator?.taskId === activeTask.id ? "quality-locator-active-button" : ""}
+                  className={activeTask.qualityMode ? "quality-locator-active-button" : ""}
                   onClick={openQualityLocator}
                   disabled={!activeTask.rubrics.length}
                 >
-                  {qualityLocator?.taskId === activeTask.id ? "结束质检" : "质检定位"}
+                  {activeTask.qualityMode ? "结束质检" : "质检定位"}
                 </button>
                 <button onClick={() => setRubricsReviewOpen(true)} disabled={!activeTask.rubrics.length}>
                   检查 Rubrics
@@ -759,13 +792,13 @@ export function Dashboard() {
           </div>
 
           {activeTask ? (
-            <ResultView
+          <ResultView
               task={activeTask}
               results={results}
               totals={activeTotals}
               logs={taskLogs}
               qualityTargets={activeQualityTargets}
-              qualityMatrix={qualityLocator?.taskId === activeTask.id ? qualityLocator.matrix : null}
+              qualityMatrix={activeTask.qualityMode ? activeTask.qualityMatrix : null}
               onRubricsUpdated={(updatedTask, updatedResults) => {
                 setTasks((current) => current.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
                 setActiveTask((current) => (current?.id === updatedTask.id ? updatedTask : current));
@@ -1134,7 +1167,7 @@ function ResultView({
               const progress = result ? task.rubrics.length : 0;
               const qualityTarget = qualityTargetByUrl.get(url);
               const qualityScores = qualityMatrix?.[index];
-              const manualCheckHref = buildManualCheckHref(task.id, url, qualityTarget);
+              const manualCheckHref = buildManualCheckHref(task.id, url);
               return (
                 <li key={url}>
                   <a href={url} target="_blank" rel="noreferrer" title={url}>
@@ -1343,10 +1376,6 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
-function qualityLocatorStorageKey(taskId: string) {
-  return `ai-rubrics-quality-locator:${taskId}`;
-}
-
 function parseQualityScoreMatrix(value: string, task: Task) {
   const text = value.trim();
   if (!text) throw new Error("请粘贴质检人员给的分数数组。");
@@ -1412,11 +1441,8 @@ function findQualityMismatches(task: Task, results: ScoreResult[], matrix: numbe
     .filter((item): item is QualityMismatch => Boolean(item));
 }
 
-function buildManualCheckHref(taskId: string, url: string, qualityTarget?: QualityMismatch) {
+function buildManualCheckHref(taskId: string, url: string) {
   const params = new URLSearchParams({ url });
-  if (qualityTarget?.rubricIndexes.length) {
-    params.set("qaRubrics", qualityTarget.rubricIndexes.join(","));
-  }
   return `/manual/${encodeURIComponent(taskId)}?${params.toString()}`;
 }
 

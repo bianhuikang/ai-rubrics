@@ -36,6 +36,9 @@ export type Task = {
   rubrics: Rubric[];
   rubricsSource: "user" | "generated" | "none";
   rubricsModified: boolean;
+  qualityMode: boolean;
+  qualityScoreText: string;
+  qualityMatrix: number[][];
   mode: TaskMode;
   status: TaskStatus;
   error?: string;
