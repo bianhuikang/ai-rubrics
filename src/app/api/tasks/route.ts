@@ -11,6 +11,11 @@ const taskSchema = z.object({
   urls: z.array(z.string().url()).min(1),
   mode: z.enum(["auto", "manual"]).default("manual"),
   skipIfExists: z.boolean().optional(),
+  qualityReviewEnabled: z.boolean().optional(),
+  qualityReviewScoreText: z.string().optional(),
+  qualityReviewReasonText: z.string().optional(),
+  qualityReviewScoreMatrix: z.array(z.array(z.number().int().min(0).max(1))).optional(),
+  qualityReviewReasonMatrix: z.array(z.array(z.string())).optional(),
   rubrics: z
     .array(
       z.object({
@@ -33,6 +38,39 @@ function validateTaskInput(input: TaskInput) {
   if (!input.prompt.trim() && !input.rubrics?.length) {
     throw new Error("需要自动生成 Rubrics 时请填写 Prompt；手填 Rubrics 时可以不填。");
   }
+  const hasQualityReviewScore = Boolean(input.qualityReviewScoreText?.trim());
+  const hasQualityReviewReason = Boolean(input.qualityReviewReasonText?.trim());
+  if (hasQualityReviewScore !== hasQualityReviewReason) {
+    throw new Error("质检评分和质检理由必须同时填写，或同时留空。");
+  }
+  if (!hasQualityReviewScore) return;
+  if (!input.rubrics?.length) {
+    throw new Error("填写质检评分和质检理由时，必须同时填写 Rubrics。");
+  }
+  if (!input.qualityReviewEnabled || !input.qualityReviewScoreMatrix || !input.qualityReviewReasonMatrix) {
+    throw new Error("质检核对配置不完整。");
+  }
+  if (input.qualityReviewScoreMatrix.length !== input.urls.length) {
+    throw new Error(`质检评分需要 ${input.urls.length} 行，对应当前任务的 ${input.urls.length} 个页面。`);
+  }
+  if (input.qualityReviewReasonMatrix.length !== input.urls.length) {
+    throw new Error(`质检理由需要 ${input.urls.length} 行，对应当前任务的 ${input.urls.length} 个页面。`);
+  }
+  input.qualityReviewScoreMatrix.forEach((row, rowIndex) => {
+    if (row.length !== input.rubrics!.length) {
+      throw new Error(`质检评分第 ${rowIndex + 1} 行需要 ${input.rubrics!.length} 列。`);
+    }
+  });
+  input.qualityReviewReasonMatrix.forEach((row, rowIndex) => {
+    if (row.length !== input.rubrics!.length) {
+      throw new Error(`质检理由第 ${rowIndex + 1} 行需要 ${input.rubrics!.length} 列。`);
+    }
+    row.forEach((reason, reasonIndex) => {
+      if (!reason.trim()) {
+        throw new Error(`质检理由第 ${rowIndex + 1} 行第 ${reasonIndex + 1} 列不能为空。`);
+      }
+    });
+  });
 }
 
 export async function GET() {

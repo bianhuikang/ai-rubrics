@@ -146,6 +146,22 @@ label {
   line-height: 1.35;
 }
 
+.quality-review-create-section {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d84b4b;
+  border-radius: 8px;
+  background: rgba(216, 75, 75, 0.04);
+}
+
+.quality-review-create-title {
+  margin: 0;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 input,
 textarea,
 select {
@@ -428,6 +444,46 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.task-id-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.quality-review-tag {
+  border: 1px solid #c98a1b;
+  background: #fff4d8;
+  color: #8a5b00;
+}
+
+.task-table tbody tr.task-row-quality-review td:first-child {
+  position: relative;
+}
+
+.task-table tbody tr.task-row-quality-review td:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 999px;
+  background: #d8a63b;
 }
 
 .task-header-actions {
@@ -846,10 +902,50 @@ select:focus {
   text-align: right;
 }
 
+.quality-review-live-array {
+  margin-top: 8px;
+}
+
+.quality-review-live-mismatch {
+  color: var(--danger);
+  font-weight: 800;
+  box-shadow: inset 0 -2px 0 var(--danger);
+}
+
 .manual-reason-section {
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: visible;
+}
+
+.quality-review-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: visible;
+}
+
+.quality-review-url-list li {
+  grid-template-columns: minmax(0, 0.46fr) auto auto minmax(220px, 1fr);
+}
+
+.quality-review-preview {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.quality-review-reasons {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.quality-review-reasons li {
+  margin: 0;
 }
 
 .manual-reason-list {
@@ -1040,7 +1136,7 @@ summary {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 220px;
   gap: 8px;
-  align-items: start;
+  align-items: stretch;
   max-height: 110px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.98);
@@ -1054,6 +1150,26 @@ summary {
 
 .manual-check-bar.all-done-flash {
   animation: manualDoneFlash 0.45s ease-in-out 4;
+}
+
+.manual-task-bar {
+  align-items: stretch;
+}
+
+.quality-review-bar {
+  align-items: stretch;
+}
+
+.manual-task-page .manual-rubrics,
+.quality-review-page .manual-rubrics {
+  align-self: stretch;
+  max-height: none;
+  overflow: visible;
+}
+
+.manual-task-page .manual-rubric-focus,
+.quality-review-page .manual-rubric-focus {
+  min-height: 100%;
 }
 
 .manual-complete-toast {
@@ -1247,7 +1363,7 @@ summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 250px;
   gap: 10px;
-  align-items: center;
+  align-items: stretch;
   min-height: 48px;
 }
 
@@ -1275,13 +1391,43 @@ summary {
   z-index: 2;
 }
 
-.manual-rubric-focus p {
-  transform: translateY(5px);
+.manual-task-page .manual-rubric-focus > p {
+  display: flex;
+  align-items: center;
   margin: 0;
   color: var(--text);
   font-size: 18px;
   font-weight: 600;
   line-height: 1.35;
+}
+
+.quality-review-page .quality-review-content {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+  min-height: 100%;
+}
+
+.quality-review-page .quality-review-content > p,
+.quality-review-page .manual-rubric-focus.complete > p {
+  display: flex;
+  align-items: center;
+  transform: translateY(10px);
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.quality-review-page .quality-review-baseline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .manual-rubric-toggle {
@@ -1300,8 +1446,9 @@ summary {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  align-items: center;
   width: 250px;
-  transform: translateY(5px);
+  min-height: 100%;
 }
 
 .manual-fail-reason {
@@ -1309,8 +1456,8 @@ summary {
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
   width: 390px;
-  align-content: start;
-  transform: translateY(5px);
+  align-content: center;
+  min-height: 100%;
 }
 
 .manual-fail-reason-field {

@@ -12,6 +12,11 @@ const updateSchema = z.object({
   qualityMode: z.boolean().optional(),
   qualityScoreText: z.string().optional(),
   qualityMatrix: z.array(z.array(z.number().int().min(0).max(1))).optional(),
+  qualityReviewEnabled: z.boolean().optional(),
+  qualityReviewScoreText: z.string().optional(),
+  qualityReviewReasonText: z.string().optional(),
+  qualityReviewScoreMatrix: z.array(z.array(z.number().int().min(0).max(1))).optional(),
+  qualityReviewReasonMatrix: z.array(z.array(z.string())).optional(),
   rubrics: z
     .array(
       z.object({

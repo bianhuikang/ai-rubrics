@@ -377,8 +377,8 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   }
 
   return (
-    <main className="manual-check-page">
-      <aside className={`manual-check-bar ${showFailReason ? "with-fail-reason" : ""} ${allDoneFlash ? "all-done-flash" : ""}`}>
+    <main className="manual-check-page manual-task-page">
+      <aside className={`manual-check-bar manual-task-bar ${showFailReason ? "with-fail-reason" : ""} ${allDoneFlash ? "all-done-flash" : ""}`}>
         <div className="manual-check-meta">
           <div className="manual-meta-title">
             <a className="manual-source-link" href={url} target="_blank" rel="noreferrer">

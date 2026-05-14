@@ -39,10 +39,16 @@ export type Task = {
   qualityMode: boolean;
   qualityScoreText: string;
   qualityMatrix: number[][];
+  qualityReviewEnabled: boolean;
+  qualityReviewScoreText: string;
+  qualityReviewReasonText: string;
+  qualityReviewScoreMatrix: number[][];
+  qualityReviewReasonMatrix: string[][];
   mode: TaskMode;
   status: TaskStatus;
   error?: string;
   resultCount?: number;
+  qualityReviewResultCount?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -179,4 +185,13 @@ export type ScoreResult = {
   evidence: PageEvidence;
   rawResponse: string;
   createdAt: string;
+};
+
+export type QualityReviewResult = {
+  taskId: string;
+  url: string;
+  scores: number[];
+  reasons: string[];
+  createdAt: string;
+  updatedAt: string;
 };

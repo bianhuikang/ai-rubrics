@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getSettings, getTask, listResults, migrateManualDraftsAfterRubricRemoval, updateResultScoresAndReasons, updateTask } from "@/lib/db";
+import { clearQualityReviewForTask, getSettings, getTask, listResults, migrateManualDraftsAfterRubricRemoval, updateResultScoresAndReasons, updateTask } from "@/lib/db";
 import { generateRubrics } from "@/lib/llm";
 import { logRubrics, logTaskStep } from "@/lib/server-log";
 
@@ -18,6 +18,7 @@ const updateRubricsSchema = z.object({
   rubrics: z.array(rubricSchema).min(1),
   removedIndexes: z.array(z.number().int().min(0)).default([]),
   preserveRubricsModified: z.boolean().default(false),
+  preserveQualityReview: z.boolean().default(false),
 });
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -67,6 +68,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         updateResultScoresAndReasons(result.id, nextScores, nextReasons);
       }
       migrateManualDraftsAfterRubricRemoval(id, removedIndexes, normalizedRubrics.length);
+    }
+
+    if (rubricsChanged && task.qualityReviewEnabled && !input.preserveQualityReview) {
+      clearQualityReviewForTask(id);
     }
 
     const updated = updateTask(id, {

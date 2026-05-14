@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_RUBRIC_PROMPT, DEFAULT_SCORING_PROMPT } from "./default-prompts";
-import type { PageEvidence, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskMode, TaskStatus } from "./types";
+import type { PageEvidence, QualityReviewResult, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskMode, TaskStatus } from "./types";
 
 const dataDir = path.join(process.cwd(), "data");
 const dbPath = path.join(dataDir, "app.db");
@@ -18,6 +18,16 @@ const EMPTY_MODEL_CONFIG = {
 };
 
 export type ManualDraftRecord = {
+  taskId: string;
+  url: string;
+  scores: number[];
+  reasons: string[];
+  answeredCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QualityReviewDraftRecord = {
   taskId: string;
   url: string;
   scores: number[];
@@ -76,6 +86,11 @@ export function getDb() {
         qualityMode INTEGER NOT NULL DEFAULT 0,
         qualityScoreText TEXT NOT NULL DEFAULT '',
         qualityMatrix TEXT NOT NULL DEFAULT '[]',
+        qualityReviewEnabled INTEGER NOT NULL DEFAULT 0,
+        qualityReviewScoreText TEXT NOT NULL DEFAULT '',
+        qualityReviewReasonText TEXT NOT NULL DEFAULT '',
+        qualityReviewScoreMatrix TEXT NOT NULL DEFAULT '[]',
+        qualityReviewReasonMatrix TEXT NOT NULL DEFAULT '[]',
         mode TEXT NOT NULL DEFAULT 'manual',
         status TEXT NOT NULL,
         error TEXT,
@@ -105,6 +120,29 @@ export function getDb() {
       );
 
       CREATE TABLE IF NOT EXISTS manual_drafts (
+        taskId TEXT NOT NULL,
+        url TEXT NOT NULL,
+        scores TEXT NOT NULL,
+        reasons TEXT NOT NULL,
+        answeredCount INTEGER NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        PRIMARY KEY (taskId, url),
+        FOREIGN KEY(taskId) REFERENCES tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS quality_review_results (
+        taskId TEXT NOT NULL,
+        url TEXT NOT NULL,
+        scores TEXT NOT NULL,
+        reasons TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        PRIMARY KEY (taskId, url),
+        FOREIGN KEY(taskId) REFERENCES tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS quality_review_drafts (
         taskId TEXT NOT NULL,
         url TEXT NOT NULL,
         scores TEXT NOT NULL,
@@ -160,6 +198,21 @@ export function getDb() {
     }
     if (!taskColumns.some((column) => column.name === "qualityMatrix")) {
       db.exec("ALTER TABLE tasks ADD COLUMN qualityMatrix TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityReviewEnabled")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityReviewEnabled INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityReviewScoreText")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityReviewScoreText TEXT NOT NULL DEFAULT ''");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityReviewReasonText")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityReviewReasonText TEXT NOT NULL DEFAULT ''");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityReviewScoreMatrix")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityReviewScoreMatrix TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!taskColumns.some((column) => column.name === "qualityReviewReasonMatrix")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN qualityReviewReasonMatrix TEXT NOT NULL DEFAULT '[]'");
     }
 
     const existing = db.prepare("SELECT id FROM settings WHERE id = 1").get();
@@ -436,10 +489,11 @@ export function listTasks(): Task[] {
   const rows = getDb()
     .prepare(
       `
-      SELECT tasks.*, COUNT(results.id) AS resultCount
+      SELECT
+        tasks.*,
+        (SELECT COUNT(*) FROM results WHERE results.taskId = tasks.id) AS resultCount,
+        (SELECT COUNT(*) FROM quality_review_results WHERE quality_review_results.taskId = tasks.id) AS qualityReviewResultCount
       FROM tasks
-      LEFT JOIN results ON results.taskId = tasks.id
-      GROUP BY tasks.id
       ORDER BY tasks.createdAt DESC
     `,
     )
@@ -451,11 +505,12 @@ export function getTask(id: string): Task | null {
   const row = getDb()
     .prepare(
       `
-      SELECT tasks.*, COUNT(results.id) AS resultCount
+      SELECT
+        tasks.*,
+        (SELECT COUNT(*) FROM results WHERE results.taskId = tasks.id) AS resultCount,
+        (SELECT COUNT(*) FROM quality_review_results WHERE quality_review_results.taskId = tasks.id) AS qualityReviewResultCount
       FROM tasks
-      LEFT JOIN results ON results.taskId = tasks.id
       WHERE tasks.id = ?
-      GROUP BY tasks.id
     `,
     )
     .get(id) as Record<string, unknown> | undefined;
@@ -472,6 +527,11 @@ export function createTask(input: {
   qualityMode?: boolean;
   qualityScoreText?: string;
   qualityMatrix?: number[][];
+  qualityReviewEnabled?: boolean;
+  qualityReviewScoreText?: string;
+  qualityReviewReasonText?: string;
+  qualityReviewScoreMatrix?: number[][];
+  qualityReviewReasonMatrix?: string[][];
 }): Task {
   const id = input.id?.trim() || crypto.randomUUID();
   const existing = getTask(id);
@@ -481,8 +541,13 @@ export function createTask(input: {
   const rubricsSource = rubrics.length ? "user" : "none";
   getDb()
     .prepare(`
-      INSERT INTO tasks (id, name, prompt, urls, rubrics, rubricsSource, qualityMode, qualityScoreText, qualityMatrix, mode, status, error, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      INSERT INTO tasks (
+        id, name, prompt, urls, rubrics, rubricsSource,
+        qualityMode, qualityScoreText, qualityMatrix,
+        qualityReviewEnabled, qualityReviewScoreText, qualityReviewReasonText, qualityReviewScoreMatrix, qualityReviewReasonMatrix,
+        mode, status, error, createdAt, updatedAt
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
     `)
     .run(
       id,
@@ -494,6 +559,11 @@ export function createTask(input: {
       input.qualityMode ? 1 : 0,
       input.qualityScoreText ?? "",
       JSON.stringify(input.qualityMatrix ?? []),
+      input.qualityReviewEnabled ? 1 : 0,
+      input.qualityReviewScoreText ?? "",
+      input.qualityReviewReasonText ?? "",
+      JSON.stringify(input.qualityReviewScoreMatrix ?? []),
+      JSON.stringify(input.qualityReviewReasonMatrix ?? []),
       input.mode ?? "manual",
       "queued",
       timestamp,
@@ -505,7 +575,25 @@ export function createTask(input: {
 export function updateTask(
   id: string,
   patch: Partial<
-    Pick<Task, "name" | "prompt" | "urls" | "rubrics" | "rubricsSource" | "rubricsModified" | "qualityMode" | "qualityScoreText" | "qualityMatrix" | "mode" | "error">
+    Pick<
+      Task,
+      | "name"
+      | "prompt"
+      | "urls"
+      | "rubrics"
+      | "rubricsSource"
+      | "rubricsModified"
+      | "qualityMode"
+      | "qualityScoreText"
+      | "qualityMatrix"
+      | "qualityReviewEnabled"
+      | "qualityReviewScoreText"
+      | "qualityReviewReasonText"
+      | "qualityReviewScoreMatrix"
+      | "qualityReviewReasonMatrix"
+      | "mode"
+      | "error"
+    >
   > & {
     status?: TaskStatus;
   },
@@ -516,7 +604,7 @@ export function updateTask(
   getDb()
     .prepare(`
       UPDATE tasks
-      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, rubricsModified = ?, qualityMode = ?, qualityScoreText = ?, qualityMatrix = ?, mode = ?, status = ?, error = ?, updatedAt = ?
+      SET name = ?, prompt = ?, urls = ?, rubrics = ?, rubricsSource = ?, rubricsModified = ?, qualityMode = ?, qualityScoreText = ?, qualityMatrix = ?, qualityReviewEnabled = ?, qualityReviewScoreText = ?, qualityReviewReasonText = ?, qualityReviewScoreMatrix = ?, qualityReviewReasonMatrix = ?, mode = ?, status = ?, error = ?, updatedAt = ?
       WHERE id = ?
     `)
     .run(
@@ -529,6 +617,11 @@ export function updateTask(
       next.qualityMode ? 1 : 0,
       next.qualityScoreText,
       JSON.stringify(next.qualityMatrix),
+      next.qualityReviewEnabled ? 1 : 0,
+      next.qualityReviewScoreText,
+      next.qualityReviewReasonText,
+      JSON.stringify(next.qualityReviewScoreMatrix),
+      JSON.stringify(next.qualityReviewReasonMatrix),
       next.mode,
       next.status,
       next.error ?? null,
@@ -544,6 +637,10 @@ export function deleteResultsForTask(taskId: string) {
 
 export function deleteResultForTaskUrl(taskId: string, url: string) {
   getDb().prepare("DELETE FROM results WHERE taskId = ? AND url = ?").run(taskId, url);
+}
+
+export function deleteQualityReviewResultForTaskUrl(taskId: string, url: string) {
+  getDb().prepare("DELETE FROM quality_review_results WHERE taskId = ? AND url = ?").run(taskId, url);
 }
 
 export function getManualDraft(taskId: string, url: string): ManualDraftRecord | null {
@@ -594,6 +691,54 @@ export function deleteManualDraftsForTask(taskId: string) {
   getDb().prepare("DELETE FROM manual_drafts WHERE taskId = ?").run(taskId);
 }
 
+export function getQualityReviewDraft(taskId: string, url: string): QualityReviewDraftRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM quality_review_drafts WHERE taskId = ? AND url = ?")
+    .get(taskId, url) as Record<string, unknown> | undefined;
+  return row ? rowToQualityReviewDraft(row) : null;
+}
+
+export function listQualityReviewDrafts(taskId: string): QualityReviewDraftRecord[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM quality_review_drafts WHERE taskId = ? ORDER BY updatedAt ASC")
+    .all(taskId) as Record<string, unknown>[];
+  return rows.map(rowToQualityReviewDraft);
+}
+
+export function saveQualityReviewDraft(input: { taskId: string; url: string; scores: number[]; reasons: string[]; answeredCount: number }) {
+  const timestamp = now();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO quality_review_drafts (taskId, url, scores, reasons, answeredCount, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(taskId, url) DO UPDATE SET
+        scores = excluded.scores,
+        reasons = excluded.reasons,
+        answeredCount = excluded.answeredCount,
+        updatedAt = excluded.updatedAt
+    `,
+    )
+    .run(
+      input.taskId,
+      input.url,
+      JSON.stringify(input.scores),
+      JSON.stringify(input.reasons),
+      input.answeredCount,
+      timestamp,
+      timestamp,
+    );
+  return getQualityReviewDraft(input.taskId, input.url)!;
+}
+
+export function deleteQualityReviewDraft(taskId: string, url: string) {
+  getDb().prepare("DELETE FROM quality_review_drafts WHERE taskId = ? AND url = ?").run(taskId, url);
+}
+
+export function deleteQualityReviewDraftsForTask(taskId: string) {
+  getDb().prepare("DELETE FROM quality_review_drafts WHERE taskId = ?").run(taskId);
+}
+
 export function migrateManualDraftsAfterRubricRemoval(taskId: string, removedIndexes: number[], nextRubricCount: number) {
   if (!removedIndexes.length) return;
   const removed = new Set(removedIndexes);
@@ -626,11 +771,71 @@ export function deleteTaskLogsForTask(taskId: string) {
   getDb().prepare("DELETE FROM task_logs WHERE taskId = ?").run(taskId);
 }
 
+export function deleteQualityReviewResultsForTask(taskId: string) {
+  getDb().prepare("DELETE FROM quality_review_results WHERE taskId = ?").run(taskId);
+}
+
+export function resetQualityReviewProgress(taskId: string) {
+  const task = getTask(taskId);
+  if (!task) throw new Error("Task not found");
+  const db = getDb();
+  const transaction = db.transaction(() => {
+    deleteQualityReviewDraftsForTask(taskId);
+    deleteQualityReviewResultsForTask(taskId);
+  });
+  transaction();
+  return getTask(taskId)!;
+}
+
+export function saveQualityReviewResult(result: Omit<QualityReviewResult, "createdAt" | "updatedAt">) {
+  const timestamp = now();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO quality_review_results (taskId, url, scores, reasons, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(taskId, url) DO UPDATE SET
+        scores = excluded.scores,
+        reasons = excluded.reasons,
+        updatedAt = excluded.updatedAt
+    `,
+    )
+    .run(result.taskId, result.url, JSON.stringify(result.scores), JSON.stringify(result.reasons), timestamp, timestamp);
+  return listQualityReviewResults(result.taskId).find((item) => item.url === result.url)!;
+}
+
+export function listQualityReviewResults(taskId: string): QualityReviewResult[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM quality_review_results WHERE taskId = ? ORDER BY updatedAt ASC")
+    .all(taskId) as Record<string, unknown>[];
+  return rows.map(rowToQualityReviewResult);
+}
+
+export function clearQualityReviewForTask(taskId: string) {
+  const task = getTask(taskId);
+  if (!task) throw new Error("Task not found");
+  const db = getDb();
+  const transaction = db.transaction(() => {
+    deleteQualityReviewDraftsForTask(taskId);
+    deleteQualityReviewResultsForTask(taskId);
+    updateTask(taskId, {
+      qualityReviewEnabled: false,
+      qualityReviewScoreText: "",
+      qualityReviewReasonText: "",
+      qualityReviewScoreMatrix: [],
+      qualityReviewReasonMatrix: [],
+    });
+  });
+  transaction();
+}
+
 export function deleteTask(taskId: string) {
   const db = getDb();
   const transaction = db.transaction(() => {
     deleteManualDraftsForTask(taskId);
+    deleteQualityReviewDraftsForTask(taskId);
     deleteResultsForTask(taskId);
+    deleteQualityReviewResultsForTask(taskId);
     deleteTaskLogsForTask(taskId);
     db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
   });
@@ -741,10 +946,16 @@ function rowToTask(row: Record<string, unknown>): Task {
     qualityMode: Number(row.qualityMode ?? 0) === 1,
     qualityScoreText: String(row.qualityScoreText ?? ""),
     qualityMatrix: parseJson<number[][]>(String(row.qualityMatrix ?? "[]"), []),
+    qualityReviewEnabled: Number(row.qualityReviewEnabled ?? 0) === 1,
+    qualityReviewScoreText: String(row.qualityReviewScoreText ?? ""),
+    qualityReviewReasonText: String(row.qualityReviewReasonText ?? ""),
+    qualityReviewScoreMatrix: parseJson<number[][]>(String(row.qualityReviewScoreMatrix ?? "[]"), []),
+    qualityReviewReasonMatrix: parseJson<string[][]>(String(row.qualityReviewReasonMatrix ?? "[]"), []),
     mode: ["auto", "manual"].includes(String(row.mode)) ? (String(row.mode) as TaskMode) : "manual",
     status: String(row.status) as TaskStatus,
     error: row.error ? String(row.error) : undefined,
     resultCount: Number(row.resultCount ?? 0),
+    qualityReviewResultCount: Number(row.qualityReviewResultCount ?? 0),
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };
@@ -757,6 +968,29 @@ function rowToManualDraft(row: Record<string, unknown>): ManualDraftRecord {
     scores: parseJson<number[]>(String(row.scores), []),
     reasons: parseJson<string[]>(String(row.reasons), []),
     answeredCount: Number(row.answeredCount ?? 0),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function rowToQualityReviewDraft(row: Record<string, unknown>): QualityReviewDraftRecord {
+  return {
+    taskId: String(row.taskId),
+    url: String(row.url),
+    scores: parseJson<number[]>(String(row.scores), []),
+    reasons: parseJson<string[]>(String(row.reasons), []),
+    answeredCount: Number(row.answeredCount ?? 0),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function rowToQualityReviewResult(row: Record<string, unknown>): QualityReviewResult {
+  return {
+    taskId: String(row.taskId),
+    url: String(row.url),
+    scores: parseJson<number[]>(String(row.scores), []),
+    reasons: parseJson<string[]>(String(row.reasons), []),
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };

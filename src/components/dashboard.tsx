@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_RUBRIC_PROMPT, DEFAULT_SCORING_PROMPT } from "@/lib/default-prompts";
-import type { Rubric, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskStatus } from "@/lib/types";
+import type { QualityReviewResult, Rubric, ScoreResult, Settings, SettingsConfig, Task, TaskLog, TaskStatus } from "@/lib/types";
 
 const emptySettings: Settings = {
   apiFormat: "openai-chat-completions",
@@ -32,6 +32,8 @@ type ParsedCaseRow = {
   prompt: string;
   urlsText: string;
   rubricsText: string;
+  qualityReviewScoreText: string;
+  qualityReviewReasonText: string;
 };
 
 type BatchCreateResponse = {
@@ -59,6 +61,7 @@ export function Dashboard() {
   const [taskSearch, setTaskSearch] = useState("");
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [results, setResults] = useState<ScoreResult[]>([]);
+  const [qualityReviewResults, setQualityReviewResults] = useState<QualityReviewResult[]>([]);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [testResult, setTestResult] = useState<Notice | null>(null);
@@ -67,6 +70,8 @@ export function Dashboard() {
   const [rubricsReviewOpen, setRubricsReviewOpen] = useState(false);
   const [qualityLocatorOpen, setQualityLocatorOpen] = useState(false);
   const [qualityScoreText, setQualityScoreText] = useState("");
+  const [qualityReviewScoreText, setQualityReviewScoreText] = useState("");
+  const [qualityReviewReasonText, setQualityReviewReasonText] = useState("");
   const [taskId, setTaskId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [urlsText, setUrlsText] = useState("");
@@ -81,9 +86,11 @@ export function Dashboard() {
   useEffect(() => {
     if (activeTask) {
       void loadResults(activeTask.id);
+      void loadQualityReviewResults(activeTask.id);
       void loadTaskLogs(activeTask.id);
     } else {
       setResults([]);
+      setQualityReviewResults([]);
       setTaskLogs([]);
     }
   }, [activeTask?.id]);
@@ -100,6 +107,7 @@ export function Dashboard() {
       void refreshAll({ keepSelection: true });
       if (activeTask) {
         void loadResults(activeTask.id);
+        void loadQualityReviewResults(activeTask.id);
         void loadTaskLogs(activeTask.id);
       }
     }, 2000);
@@ -113,6 +121,7 @@ export function Dashboard() {
     const timer = window.setInterval(() => {
       void refreshAll({ keepSelection: true });
       void loadResults(activeTask.id);
+      void loadQualityReviewResults(activeTask.id);
     }, 2000);
 
     return () => window.clearInterval(timer);
@@ -130,11 +139,16 @@ export function Dashboard() {
 
     void (async () => {
       try {
-        const response = await fetch(`/api/tasks/${taskIdToNormalize}/rubrics`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rubrics: normalizedRubrics, removedIndexes: [], preserveRubricsModified: true }),
-        });
+                        const response = await fetch(`/api/tasks/${taskIdToNormalize}/rubrics`, {
+                          method: "PUT",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            rubrics: normalizedRubrics,
+                            removedIndexes: [],
+                            preserveRubricsModified: true,
+                            preserveQualityReview: true,
+                          }),
+                        });
         const data = (await response.json()) as { task?: Task; results?: ScoreResult[]; error?: string };
         if (!response.ok || !data.task || !data.results) throw new Error(data.error || "Rubrics 保存失败");
         setTasks((current) => current.map((task) => (task.id === data.task?.id ? data.task! : task)));
@@ -156,6 +170,7 @@ export function Dashboard() {
     const refreshActiveTaskResults = () => {
       void refreshAll({ keepSelection: true });
       void loadResults(activeTask.id);
+      void loadQualityReviewResults(activeTask.id);
     };
 
     const handleFocus = () => {
@@ -228,6 +243,13 @@ export function Dashboard() {
     if (!response.ok) return;
     const data = (await response.json()) as { results: ScoreResult[] };
     setResults(data.results);
+  }
+
+  async function loadQualityReviewResults(id: string) {
+    const response = await fetch(`/api/tasks/${id}/quality-review-results`);
+    if (!response.ok) return;
+    const data = (await response.json()) as { results: QualityReviewResult[] };
+    setQualityReviewResults(data.results);
   }
 
   async function loadTaskLogs(id: string) {
@@ -315,12 +337,25 @@ export function Dashboard() {
     const promptText = prompt.trim();
     let urls: string[];
     let rubrics: Rubric[];
+    let qualityReviewPayload: {
+      qualityReviewEnabled?: true;
+      qualityReviewScoreText?: string;
+      qualityReviewReasonText?: string;
+      qualityReviewScoreMatrix?: number[][];
+      qualityReviewReasonMatrix?: string[][];
+    } = {};
     try {
       urls = parseUrls(urlsText);
       rubrics = parseRubricsInput(rubricsText);
       if (!promptText && !rubrics.length) {
         throw new Error("需要自动生成 Rubrics 时请填写 Prompt；手填 Rubrics 时可以不填。");
       }
+      qualityReviewPayload = parseQualityReviewInputs({
+        urls,
+        rubrics,
+        scoreText: qualityReviewScoreText,
+        reasonText: qualityReviewReasonText,
+      });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
       return;
@@ -330,13 +365,21 @@ export function Dashboard() {
       const response = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: id || undefined, prompt: promptText, urls, rubrics, mode: manualMode ? "manual" : "auto" }),
+        body: JSON.stringify({
+          id: id || undefined,
+          prompt: promptText,
+          urls,
+          rubrics,
+          mode: manualMode ? "manual" : "auto",
+          ...qualityReviewPayload,
+        }),
       });
       if (!response.ok) throw new Error(await response.text());
       const task = (await response.json()) as Task;
       setTasks((current) => [task, ...current]);
       setActiveTask(task);
       setResults([]);
+      setQualityReviewResults([]);
       setTaskLogs([]);
       void runTask(task.id);
     });
@@ -365,6 +408,8 @@ export function Dashboard() {
     setPrompt(parsed.prompt);
     setUrlsText(parsed.urlsText);
     setRubricsText(parsed.rubricsText);
+    setQualityReviewScoreText(parsed.qualityReviewScoreText);
+    setQualityReviewReasonText(parsed.qualityReviewReasonText);
     setNotice({ kind: "success", text: "已解析到表单。" });
   }
 
@@ -378,6 +423,11 @@ export function Dashboard() {
         rubrics: Rubric[];
         mode: "auto" | "manual";
         skipIfExists: true;
+        qualityReviewEnabled?: true;
+        qualityReviewScoreText?: string;
+        qualityReviewReasonText?: string;
+        qualityReviewScoreMatrix?: number[][];
+        qualityReviewReasonMatrix?: string[][];
       }> = [];
       const localErrors: Array<{ id: string; message: string }> = [];
       let missingIdCount = 0;
@@ -390,13 +440,22 @@ export function Dashboard() {
         }
 
         try {
+          const urls = parseUrls(parsed.urlsText);
+          const rubrics = parseRubricsInput(parsed.rubricsText);
+          const qualityReviewPayload = parseQualityReviewInputs({
+            urls,
+            rubrics,
+            scoreText: parsed.qualityReviewScoreText,
+            reasonText: parsed.qualityReviewReasonText,
+          });
           tasksToCreate.push({
             id,
             prompt: parsed.prompt,
-            urls: parseUrls(parsed.urlsText),
-            rubrics: parseRubricsInput(parsed.rubricsText),
+            urls,
+            rubrics,
             mode: manualMode ? "manual" : "auto",
             skipIfExists: true,
+            ...qualityReviewPayload,
           });
         } catch (error) {
           localErrors.push({
@@ -522,6 +581,26 @@ export function Dashboard() {
     void runTask(activeTask.id);
   }
 
+  async function resetActiveQualityReview() {
+    if (!activeTask?.qualityReviewEnabled) return;
+    if (!window.confirm("??????????????????")) return;
+    try {
+      const response = await fetch(`/api/tasks/${activeTask.id}/quality-review-results`, {
+        method: "DELETE",
+      });
+      const data = (await response.json()) as { task?: Task; results?: QualityReviewResult[]; error?: string };
+      if (!response.ok || !data.task || !data.results) {
+        throw new Error(data.error || "??????");
+      }
+      const nextTask = data.task;
+      setTasks((current) => current.map((task) => (task.id === nextTask.id ? nextTask : task)));
+      setActiveTask((current) => (current?.id === nextTask.id ? nextTask : current));
+      setQualityReviewResults(data.results);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function updateTaskQualityState(
     taskId: string,
     patch: Pick<Task, "qualityMode" | "qualityScoreText" | "qualityMatrix">,
@@ -627,7 +706,7 @@ export function Dashboard() {
                 解析剪贴板
               </button>
               <button className="primary" onClick={createTask} disabled={Boolean(busy)}>
-                创建并执行
+                创建
               </button>
             </div>
           </div>
@@ -657,6 +736,29 @@ export function Dashboard() {
               placeholder={"留空则自动生成；手填时一行一条规则。"}
             />
           </label>
+          <div className="quality-review-create-section">
+            <p className="quality-review-create-title">质检专用</p>
+
+          <label>
+            质检评分
+            <textarea
+              value={qualityReviewScoreText}
+              onChange={(event) => setQualityReviewScoreText(event.target.value)}
+              rows={6}
+              placeholder='支持 JSON，如 [[1,0,1],[0,1,1]]；也支持每行一个页面：1,0,1'
+            />
+          </label>
+          <label>
+            质检理由
+            <textarea
+              value={qualityReviewReasonText}
+              onChange={(event) => setQualityReviewReasonText(event.target.value)}
+              rows={8}
+              placeholder='支持 JSON / 按页面矩阵；也支持平铺格式：第1个页面->第4条rubrics->原因'
+            />
+          </label>
+          <p className="field-hint">质检评分和质检理由必须同时填写，或同时留空。填写时必须同时提供 Rubrics。</p>
+          </div>
         </section>
 
         <section className="compact-panel task-panel">
@@ -699,6 +801,7 @@ export function Dashboard() {
                         className={[
                           activeTask?.id === task.id ? "active-row" : "",
                           `task-row-${task.status}`,
+                          task.qualityReviewEnabled ? "task-row-quality-review" : "",
                           task.rubricsModified ? "task-row-rubrics-modified" : "",
                         ]
                           .filter(Boolean)
@@ -708,12 +811,17 @@ export function Dashboard() {
                           void loadResults(task.id);
                         }}
                       >
-                        <td className="mono">{task.id}</td>
+                        <td>
+                          <div className="task-id-cell">
+                            <span className="mono">{task.id}</span>
+                            {task.qualityReviewEnabled ? <span className="task-tag quality-review-tag">质检</span> : null}
+                          </div>
+                        </td>
                         <td>
                           <StatusBadge status={task.status} />
                         </td>
                         <td>
-                          {task.resultCount ?? 0}/{task.urls.length}
+                          {taskCompletedPageCount(task)}/{task.urls.length}
                         </td>
                         <td>
                           <div className="progress-cell">
@@ -726,19 +834,21 @@ export function Dashboard() {
                         <td>{formatTime(task.updatedAt)}</td>
                         <td>
                           <div className="row-actions">
-                            <button
-                              className="small-button"
-                              disabled={runningTaskIds.has(task.id)}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setNotice({ kind: "info", text: `任务 ${task.id} 已重新开始。` });
-                                setActiveTask(task);
-                                setResults([]);
-                                void runTask(task.id);
-                              }}
-                            >
-                              重跑
-                            </button>
+                            {false ? (
+                              <button
+                                className="small-button"
+                                disabled={runningTaskIds.has(task.id)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setNotice({ kind: "info", text: `任务 ${task.id} 已重新开始。` });
+                                  setActiveTask(task);
+                                  setResults([]);
+                                  void runTask(task.id);
+                                }}
+                              >
+                                重跑
+                              </button>
+                            ) : null}
                             <button
                               className="small-button danger-button"
                               disabled={runningTaskIds.has(task.id) || runningStatuses.includes(task.status)}
@@ -774,19 +884,27 @@ export function Dashboard() {
             </div>
             {activeTask ? (
               <div className="actions">
-                <button
-                  className={activeTask.qualityMode ? "quality-locator-active-button" : ""}
-                  onClick={openQualityLocator}
-                  disabled={!activeTask.rubrics.length}
-                >
-                  {activeTask.qualityMode ? "结束质检" : "质检定位"}
-                </button>
+                {!activeTask.qualityReviewEnabled ? (
+                  <button
+                    className={activeTask.qualityMode ? "quality-locator-active-button" : ""}
+                    onClick={openQualityLocator}
+                    disabled={!activeTask.rubrics.length}
+                  >
+                    {activeTask.qualityMode ? "结束质检" : "质检定位"}
+                  </button>
+                ) : null}
                 <button onClick={() => setRubricsReviewOpen(true)} disabled={!activeTask.rubrics.length}>
                   检查 Rubrics
                 </button>
-                <button onClick={rerunActiveTask} disabled={runningTaskIds.has(activeTask.id)}>
-                  重跑
-                </button>
+                {!activeTask.qualityReviewEnabled ? (
+                  <button onClick={rerunActiveTask} disabled={runningTaskIds.has(activeTask.id)}>
+                    {"\u91cd\u8dd1"}
+                  </button>
+                ) : (
+                  <button className="danger-button" onClick={resetActiveQualityReview}>
+                    {"\u91cd\u7f6e\u8d28\u68c0"}
+                  </button>
+                )}
               </div>
             ) : null}
           </div>
@@ -795,14 +913,21 @@ export function Dashboard() {
           <ResultView
               task={activeTask}
               results={results}
+              qualityReviewResults={qualityReviewResults}
               totals={activeTotals}
               logs={taskLogs}
               qualityTargets={activeQualityTargets}
               qualityMatrix={activeTask.qualityMode ? activeTask.qualityMatrix : null}
+              onRerunTask={rerunActiveTask}
               onRubricsUpdated={(updatedTask, updatedResults) => {
                 setTasks((current) => current.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
                 setActiveTask((current) => (current?.id === updatedTask.id ? updatedTask : current));
                 setResults(updatedResults);
+              }}
+              onQualityReviewReset={(updatedTask, updatedResults) => {
+                setTasks((current) => current.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
+                setActiveTask((current) => (current?.id === updatedTask.id ? updatedTask : current));
+                setQualityReviewResults(updatedResults);
               }}
             />
           ) : (
@@ -843,7 +968,7 @@ export function Dashboard() {
         </div>
       ) : null}
 
-      {qualityLocatorOpen && activeTask ? (
+      {qualityLocatorOpen && activeTask && !activeTask.qualityReviewEnabled ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setQualityLocatorOpen(false)}>
           <section className="quality-locator-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <div className="panel-header">
@@ -997,19 +1122,25 @@ export function Dashboard() {
 function ResultView({
   task,
   results,
+  qualityReviewResults,
   totals,
   logs,
   qualityTargets,
   qualityMatrix,
+  onRerunTask,
   onRubricsUpdated,
+  onQualityReviewReset,
 }: {
   task: Task;
   results: ScoreResult[];
+  qualityReviewResults: QualityReviewResult[];
   totals: Array<{ url: string; total: number; max: number }>;
   logs: TaskLog[];
   qualityTargets: QualityMismatch[];
   qualityMatrix: number[][] | null;
+  onRerunTask: () => void;
   onRubricsUpdated: (task: Task, results: ScoreResult[]) => void;
+  onQualityReviewReset: (task: Task, results: QualityReviewResult[]) => void;
 }) {
   const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
   const [rubricBusy, setRubricBusy] = useState<number | null>(null);
@@ -1036,8 +1167,12 @@ function ResultView({
     .filter((result): result is ScoreResult => Boolean(result));
   const allScoresReady = task.status === "scored" && orderedResults.length >= task.urls.length;
   const scoreCopyText = JSON.stringify(orderedResults.map((result) => result.scores));
+  const qualityReviewEnabledForTask = isQualityReviewConfigured(task);
   const manualFailSummaries = task.mode === "manual" ? summarizeManualFailReasons(task, results) : [];
   const manualFailCopyText = manualFailSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n");
+  const qualityReviewFailSummaries =
+    task.mode === "manual" && qualityReviewEnabledForTask ? summarizeQualityReviewReviewerReasons(task, qualityReviewResults) : [];
+  const qualityReviewFailCopyText = qualityReviewFailSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n");
   const qualityTargetByUrl = useMemo(() => {
     return new Map(qualityTargets.map((target) => [target.url, target]));
   }, [qualityTargets]);
@@ -1142,7 +1277,7 @@ function ResultView({
 
   if (task.status === "error") {
     return (
-      <div className="results-wrap process-only">
+      <div className="results-wrap">
         <ProcessPanel task={task} logs={logs} />
         <p className="error-text">{task.error || "任务执行失败。"}</p>
       </div>
@@ -1150,61 +1285,33 @@ function ResultView({
   }
 
   if (task.mode === "manual" && task.rubrics.length > 0) {
+    if (qualityReviewEnabledForTask) {
+      return (
+        <div className="results-wrap">
+          <QualityReviewTaskResultSection
+            task={task}
+            results={qualityReviewResults}
+            failSummaries={qualityReviewFailSummaries}
+            failCopyText={qualityReviewFailCopyText}
+            onReset={onQualityReviewReset}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className="results-wrap">
         {renderRubricSection()}
-
-        <section className="score-section">
-          <div className="copy-bar">
-            <button className="small-button copy-action-button" onClick={() => void copyText(scoreCopyText)} disabled={!orderedResults.length}>
-              复制打分
-            </button>
-            <span>手动检查 URL ({orderedResults.length}/{task.urls.length})</span>
-          </div>
-          <ul className="manual-url-list">
-            {task.urls.map((url, index) => {
-              const result = results.find((item) => item.url === url);
-              const progress = result ? task.rubrics.length : 0;
-              const qualityTarget = qualityTargetByUrl.get(url);
-              const qualityScores = qualityMatrix?.[index];
-              const manualCheckHref = buildManualCheckHref(task.id, url);
-              return (
-                <li key={url}>
-                  <a href={url} target="_blank" rel="noreferrer" title={url}>
-                    {index + 1}. {urlTail(url)}
-                  </a>
-                  <span className="manual-score-chip">{`${progress}/${task.rubrics.length}`}</span>
-                  <a
-                    className={`button-link small-button ${index === 0 ? "manual-start-button" : ""}`}
-                    href={manualCheckHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={qualityTarget ? `待复查 Rubric：${formatQualityRubrics(qualityTarget.rubricIndexes)}` : undefined}
-                  >
-                    {index === 0 ? "手动检查(请从这里开始)" : "手动检查"}
-                  </a>
-                  <ScoreArrayDisplay scores={result?.scores} qualityScores={qualityScores} qualityIndexes={qualityTarget?.rubricIndexes ?? []} />
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
-        {manualFailSummaries.length ? (
-          <section className="manual-reason-section">
-            <div className="copy-bar">
-              <button className="small-button copy-action-button" onClick={() => void copyText(manualFailCopyText)}>
-                复制原因
-              </button>
-              <span>不符合原因汇总</span>
-            </div>
-            <ol className="manual-reason-list">
-              {manualFailSummaries.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ol>
-          </section>
-        ) : null}
+        <ManualTaskResultSection
+          task={task}
+          results={results}
+          scoreCopyText={scoreCopyText}
+          qualityMatrix={qualityMatrix}
+          qualityTargetByUrl={qualityTargetByUrl}
+          failSummaries={manualFailSummaries}
+          failCopyText={manualFailCopyText}
+          onRerun={onRerunTask}
+        />
       </div>
     );
   }
@@ -1276,6 +1383,245 @@ function ResultView({
         </div>
       </section>
     </div>
+  );
+}
+
+function ManualTaskResultSection({
+  task,
+  results,
+  scoreCopyText,
+  qualityMatrix,
+  qualityTargetByUrl,
+  failSummaries,
+  failCopyText,
+  onRerun,
+}: {
+  task: Task;
+  results: ScoreResult[];
+  scoreCopyText: string;
+  qualityMatrix: number[][] | null;
+  qualityTargetByUrl: Map<string, QualityMismatch>;
+  failSummaries: string[];
+  failCopyText: string;
+  onRerun: () => void;
+}) {
+  return (
+    <>
+      <section className="score-section">
+        <div className="copy-bar">
+          <button className="small-button copy-action-button" onClick={() => void copyText(scoreCopyText)} disabled={!results.length}>
+            复制打分
+          </button>
+          <span>手动检查 URL ({results.length}/{task.urls.length})</span>
+        </div>
+        <ul className="manual-url-list">
+          {task.urls.map((url, index) => {
+            const result = results.find((item) => item.url === url);
+            const progress = result ? task.rubrics.length : 0;
+            const qualityTarget = qualityTargetByUrl.get(url);
+            const qualityScores = qualityMatrix?.[index];
+            const manualCheckHref = buildManualCheckHref(task.id, url);
+            return (
+              <li key={url}>
+                <a href={url} target="_blank" rel="noreferrer" title={url}>
+                  {index + 1}. {urlTail(url)}
+                </a>
+                <span className="manual-score-chip">{`${progress}/${task.rubrics.length}`}</span>
+                <a
+                  className={`button-link small-button ${index === 0 ? "manual-start-button" : ""}`}
+                  href={manualCheckHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={qualityTarget ? `待复查 Rubric：${formatQualityRubrics(qualityTarget.rubricIndexes)}` : undefined}
+                >
+                  {index === 0 ? "手动检查(请从这里开始)" : "手动检查"}
+                </a>
+                <ScoreArrayDisplay scores={result?.scores} qualityScores={qualityScores} qualityIndexes={qualityTarget?.rubricIndexes ?? []} />
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {failSummaries.length ? (
+        <section className="manual-reason-section">
+          <div className="copy-bar">
+            <button className="small-button copy-action-button" onClick={() => void copyText(failCopyText)}>
+              复制原因
+            </button>
+            <span>质检原因汇总</span>
+          </div>
+          <ol className="manual-reason-list">
+            {failSummaries.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+function QualityReviewTaskResultSection({
+  task,
+  results,
+  failSummaries,
+  failCopyText,
+  onReset,
+}: {
+  task: Task;
+  results: QualityReviewResult[];
+  failSummaries: string[];
+  failCopyText: string;
+  onReset: (task: Task, results: QualityReviewResult[]) => void;
+}) {
+  const orderedResults = task.urls
+    .map((url) => results.find((result) => result.url === url))
+    .filter((result): result is QualityReviewResult => Boolean(result));
+  const allScoresReady = orderedResults.length >= task.urls.length;
+  const scoreCopyText = JSON.stringify(task.urls.map((url) => results.find((result) => result.url === url)?.scores ?? []));
+  const answerFailSummaries = summarizeQualityReviewBaselineReasons(task);
+  const answerFailCopyText = answerFailSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n");
+
+  async function resetQualityReview() {
+    if (!window.confirm("确认重置当前任务的质检分数和理由吗？")) return;
+    try {
+      const response = await fetch(`/api/tasks/${task.id}/quality-review-results`, {
+        method: "DELETE",
+      });
+      const data = (await response.json()) as { task?: Task; results?: QualityReviewResult[]; error?: string };
+      if (!response.ok || !data.task || !data.results) {
+        throw new Error(data.error || "重置质检失败");
+      }
+      onReset(data.task, data.results);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <>
+      <section className="score-section">
+        <div className="copy-bar">
+          <div className="rubric-copy-with-warning">
+            <button className="small-button copy-action-button" onClick={() => void copyText(scoreCopyText)} disabled={!results.length}>
+              复制质检打分
+            </button>
+          </div>
+          <span>手工质检 URL ({results.length}/{task.urls.length})</span>
+        </div>
+        <ul className="manual-url-list">
+          {task.urls.map((url, index) => {
+            const result = results.find((item) => item.url === url);
+            const progress = result ? task.rubrics.length : 0;
+            const qualityReviewHref = buildManualQualityReviewHref(task.id, url);
+            const answerScores = task.qualityReviewScoreMatrix[index] ?? [];
+            const mismatchIndexes = result
+              ? answerScores.map((score, scoreIndex) => (result.scores[scoreIndex] !== score ? scoreIndex : -1)).filter((scoreIndex) => scoreIndex >= 0)
+              : [];
+            return (
+              <li key={`quality-review-${url}`}>
+                <a href={url} target="_blank" rel="noreferrer" title={url}>
+                  {index + 1}. {urlTail(url)}
+                </a>
+                <span className="manual-score-chip">{`${progress}/${task.rubrics.length}`}</span>
+                <a
+                  className={`button-link small-button ${index === 0 ? "manual-start-button" : ""}`}
+                  href={qualityReviewHref}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {index === 0 ? "手工质检 请从这里开始" : "手工质检"}
+                </a>
+                <ScoreArrayDisplay scores={answerScores} qualityScores={result?.scores} qualityIndexes={mismatchIndexes} />
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {allScoresReady ? (
+        <section className="score-section">
+          <div className="copy-bar">
+            <button className="small-button" onClick={() => void copyText(scoreCopyText)}>
+              复制质检打分
+            </button>
+            <span>打分结果</span>
+          </div>
+          <div className="table-wrap">
+            <table className="score-table">
+              <thead>
+                <tr>
+                  <th className="col-index">序号</th>
+                  <th className="col-url">URL前缀</th>
+                  {task.rubrics.map((rubric) => (
+                    <th key={rubric.id} title={rubric.description}>
+                      {rubric.id}
+                    </th>
+                  ))}
+                  <th>总分</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderedResults.map((result, index) => {
+                  const total = result.scores.reduce((sum, score) => sum + score, 0);
+                  return (
+                    <tr key={`${result.taskId}-${result.url}`}>
+                      <td className="col-index">{index + 1}</td>
+                      <td className="col-url">
+                        <a href={result.url} target="_blank" rel="noreferrer" title={result.url}>
+                          {urlPrefixBeforeHtml(result.url)}
+                        </a>
+                      </td>
+                      {result.scores.map((score, scoreIndex) => (
+                        <td key={`${result.url}-${scoreIndex}`} className={score ? "pass" : "fail"}>
+                          {score}
+                        </td>
+                      ))}
+                      <td>
+                        {total}/{task.rubrics.length}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {failSummaries.length ? (
+        <section className="manual-reason-section">
+          <div className="copy-bar">
+            <button className="small-button copy-action-button" onClick={() => void copyText(failCopyText)}>
+              复制原因
+            </button>
+            <span>质检原因汇总</span>
+          </div>
+          <ol className="manual-reason-list">
+            {failSummaries.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
+      {answerFailSummaries.length ? (
+        <section className="manual-reason-section">
+          <div className="copy-bar">
+            <button className="small-button copy-action-button" onClick={() => void copyText(answerFailCopyText)}>
+              复制作答人理由
+            </button>
+            <span>作答人理由汇总</span>
+          </div>
+          <ol className="manual-reason-list">
+            {answerFailSummaries.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+    </>
   );
 }
 
@@ -1372,6 +1718,17 @@ function ScoreArrayRow({
   );
 }
 
+function ReasonArrayPreview({ reasons }: { reasons?: string[] }) {
+  if (!reasons?.length) return <div className="quality-review-reasons muted">未提供理由</div>;
+  return (
+    <ol className="quality-review-reasons">
+      {reasons.map((reason, index) => (
+        <li key={`${index}-${reason}`}>{`R${index + 1}: ${reason}`}</li>
+      ))}
+    </ol>
+  );
+}
+
 async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
@@ -1394,6 +1751,79 @@ function parseQualityScoreMatrix(value: string, task: Task) {
   });
 
   return parsed;
+}
+
+function parseQualityReviewInputs({
+  urls,
+  rubrics,
+  scoreText,
+  reasonText,
+}: {
+  urls: string[];
+  rubrics: Rubric[];
+  scoreText: string;
+  reasonText: string;
+}) {
+  const trimmedScoreText = scoreText.trim();
+  const trimmedReasonText = reasonText.trim();
+  if (!trimmedScoreText && !trimmedReasonText) return {};
+  if (!trimmedScoreText || !trimmedReasonText) {
+    throw new Error("质检评分和质检理由必须同时填写，或同时留空。");
+  }
+  if (!rubrics.length) {
+    throw new Error("填写质检评分和质检理由时，必须同时填写 Rubrics。");
+  }
+
+  const qualityReviewScoreMatrix = parseNamedScoreMatrix(trimmedScoreText, urls.length, rubrics.length, "质检评分");
+  const qualityReviewReasonMatrix = parseNamedReasonMatrix(trimmedReasonText, qualityReviewScoreMatrix, "质检理由");
+
+  return {
+    qualityReviewEnabled: true as const,
+    qualityReviewScoreText: trimmedScoreText,
+    qualityReviewReasonText: trimmedReasonText,
+    qualityReviewScoreMatrix,
+    qualityReviewReasonMatrix,
+  };
+}
+
+function parseNamedScoreMatrix(text: string, urlCount: number, rubricCount: number, label: string) {
+  const parsed = parseScoreMatrixInput(text);
+  if (!parsed.length) throw new Error(`没有识别到${label}数组。`);
+  if (parsed.length !== urlCount) {
+    throw new Error(`${label}需要 ${urlCount} 行，对应当前任务的 ${urlCount} 个页面。`);
+  }
+  parsed.forEach((row, rowIndex) => {
+    if (row.length !== rubricCount) {
+      throw new Error(`${label}第 ${rowIndex + 1} 行需要 ${rubricCount} 列，对应当前任务的 ${rubricCount} 条 Rubric。`);
+    }
+  });
+  return parsed;
+}
+
+function parseNamedReasonMatrix(text: string, scoreMatrix: number[][], label: string) {
+  const flatEntries = parseFlatReasonEntries(text);
+  if (flatEntries.length) {
+    return buildReasonMatrixFromFlatEntries(flatEntries, scoreMatrix, label);
+  }
+
+  const parsed = parseReasonMatrixInput(text);
+  const urlCount = scoreMatrix.length;
+  const rubricCount = scoreMatrix[0]?.length ?? 0;
+  if (!parsed.length) throw new Error(`没有识别到${label}数组。`);
+  if (parsed.length !== urlCount) {
+    throw new Error(`${label}需要 ${urlCount} 行，对应当前任务的 ${urlCount} 个页面。`);
+  }
+  parsed.forEach((row, rowIndex) => {
+    if (row.length !== rubricCount) {
+      throw new Error(`${label}第 ${rowIndex + 1} 行需要 ${rubricCount} 列，对应当前任务的 ${rubricCount} 条 Rubric。`);
+    }
+    row.forEach((reason, reasonIndex) => {
+      if (!reason.trim()) {
+        throw new Error(`${label}第 ${rowIndex + 1} 行第 ${reasonIndex + 1} 列不能为空。`);
+      }
+    });
+  });
+  return parsed.map((row) => row.map((reason) => reason.trim()));
 }
 
 function parseScoreMatrixInput(text: string): number[][] {
@@ -1426,6 +1856,116 @@ function normalizeScoreRow(row: unknown[]) {
   });
 }
 
+function parseReasonMatrixInput(text: string): string[][] {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      if (parsed.every((item) => typeof item === "string")) {
+        return [normalizeReasonRow(parsed)];
+      }
+      if (parsed.every(Array.isArray)) {
+        return parsed.map((row) => normalizeReasonRow(row as unknown[]));
+      }
+    }
+  } catch {
+    // Fall through to tolerant line parsing.
+  }
+
+  const rows = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return rows.map((row) => normalizeReasonRow(row.split(/\t|\s*\|\|\s*/).filter(Boolean)));
+}
+
+function normalizeReasonRow(row: unknown[]) {
+  return row.map((item) => String(item).trim());
+}
+
+type FlatReasonEntry = {
+  urlIndex: number;
+  rubricIndex: number | null;
+  reason: string;
+};
+
+function parseFlatReasonEntries(text: string): FlatReasonEntry[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return [];
+
+  const entries: FlatReasonEntry[] = [];
+  for (const line of lines) {
+    const normalized = line.replace(/^\d+\s*[.、]\s*/, "").trim();
+    const rubricMatch = normalized.match(/^第\s*(\d+)\s*个页面\s*->\s*第\s*(\d+)\s*条\s*rubrics\s*->\s*(.+)$/i);
+    if (rubricMatch) {
+      entries.push({
+        urlIndex: Number(rubricMatch[1]) - 1,
+        rubricIndex: Number(rubricMatch[2]) - 1,
+        reason: rubricMatch[3].trim(),
+      });
+      continue;
+    }
+
+    const pageMatch = normalized.match(/^第\s*(\d+)\s*个页面\s*->\s*(.+)$/);
+    if (pageMatch) {
+      entries.push({
+        urlIndex: Number(pageMatch[1]) - 1,
+        rubricIndex: null,
+        reason: pageMatch[2].trim(),
+      });
+      continue;
+    }
+
+    return [];
+  }
+
+  return entries;
+}
+
+function buildReasonMatrixFromFlatEntries(entries: FlatReasonEntry[], scoreMatrix: number[][], label: string) {
+  const urlCount = scoreMatrix.length;
+  const rubricCount = scoreMatrix[0]?.length ?? 0;
+  const matrix: string[][] = scoreMatrix.map((row) => row.map((score) => (score ? "人工标记符合" : "")));
+  const pageLevelReasons = new Map<number, string>();
+
+  for (const entry of entries) {
+    if (!Number.isInteger(entry.urlIndex) || entry.urlIndex < 0 || entry.urlIndex >= urlCount) {
+      throw new Error(`${label}中的页面序号超出范围：第 ${entry.urlIndex + 1} 个页面。`);
+    }
+    if (!entry.reason) {
+      throw new Error(`${label}中存在空理由，请检查平铺内容。`);
+    }
+
+    if (entry.rubricIndex === null) {
+      pageLevelReasons.set(entry.urlIndex, entry.reason);
+      continue;
+    }
+
+    if (!Number.isInteger(entry.rubricIndex) || entry.rubricIndex < 0 || entry.rubricIndex >= rubricCount) {
+      throw new Error(`${label}中的 Rubric 序号超出范围：第 ${entry.rubricIndex + 1} 条。`);
+    }
+
+    matrix[entry.urlIndex][entry.rubricIndex] = entry.reason;
+  }
+
+  scoreMatrix.forEach((row, urlIndex) => {
+    row.forEach((score, rubricIndex) => {
+      if (score === 1) return;
+      if (matrix[urlIndex][rubricIndex].trim()) return;
+      const pageLevelReason = pageLevelReasons.get(urlIndex);
+      if (pageLevelReason) {
+        matrix[urlIndex][rubricIndex] = pageLevelReason;
+        return;
+      }
+      throw new Error(`${label}缺少第 ${urlIndex + 1} 个页面第 ${rubricIndex + 1} 条 Rubric 的理由。`);
+    });
+  });
+
+  return matrix;
+}
+
 function findQualityMismatches(task: Task, results: ScoreResult[], matrix: number[][]): QualityMismatch[] {
   const resultByUrl = new Map(results.map((result) => [result.url, result]));
   return task.urls
@@ -1444,6 +1984,21 @@ function findQualityMismatches(task: Task, results: ScoreResult[], matrix: numbe
 function buildManualCheckHref(taskId: string, url: string) {
   const params = new URLSearchParams({ url });
   return `/manual/${encodeURIComponent(taskId)}?${params.toString()}`;
+}
+
+function buildManualQualityReviewHref(taskId: string, url: string) {
+  const params = new URLSearchParams({ url });
+  return `/manual-quality/${encodeURIComponent(taskId)}?${params.toString()}`;
+}
+
+function isQualityReviewConfigured(task: Task) {
+  return (
+    task.qualityReviewEnabled &&
+    task.qualityReviewScoreMatrix.length === task.urls.length &&
+    task.qualityReviewReasonMatrix.length === task.urls.length &&
+    task.qualityReviewScoreMatrix.every((row) => row.length === task.rubrics.length) &&
+    task.qualityReviewReasonMatrix.every((row) => row.length === task.rubrics.length)
+  );
 }
 
 function formatQualityRubrics(indexes: number[]) {
@@ -1532,7 +2087,7 @@ function parseCaseRows(value: string): ParsedCaseRow[] {
   if (!text) return [];
 
   return splitCaseRows(text)
-    .map(parseCaseRow)
+    .map(parseCaseRowWithQuality)
     .filter((row): row is ParsedCaseRow => Boolean(row));
 }
 
@@ -1584,7 +2139,106 @@ function parseCaseRow(value: string): ParsedCaseRow | null {
     prompt,
     urlsText,
     rubricsText: normalizeCaseRubricsText(rubricsSource),
+    qualityReviewScoreText: "",
+    qualityReviewReasonText: "",
   };
+}
+
+function parseCaseRowWithQuality(value: string): ParsedCaseRow | null {
+  const text = value.trim();
+  if (!text) return null;
+
+  const cells = text
+    .split("\t")
+    .map(normalizeCaseCell)
+    .filter(Boolean);
+  const urlCellIndex = cells.findIndex((cell) => /^["']?\s*\[/.test(cell) && /https?:\/\//i.test(cell));
+  if (cells.length < 3 || urlCellIndex < 1) return null;
+
+  const id = cells[0];
+  const prompt = cells.slice(1, urlCellIndex).join("\n\n").trim();
+  const urlsText = cells[urlCellIndex];
+  const { rubricsSource, qualityReviewScoreText, qualityReviewReasonText } = extractCaseReviewFields(cells.slice(urlCellIndex + 1));
+
+  if (!id || !prompt || !urlsText || !rubricsSource) return null;
+
+  try {
+    parseUrls(urlsText);
+  } catch {
+    return null;
+  }
+
+  return {
+    id,
+    prompt,
+    urlsText,
+    rubricsText: normalizeCaseRubricsText(rubricsSource),
+    qualityReviewScoreText,
+    qualityReviewReasonText,
+  };
+}
+
+function extractCaseReviewFields(cells: string[]) {
+  let rubricCells = [...cells];
+  let qualityReviewScoreText = "";
+  let qualityReviewReasonText = "";
+
+  const lastCell = rubricCells[rubricCells.length - 1]?.trim() ?? "";
+  if (looksLikeCaseReasonMatrixCell(lastCell)) {
+    qualityReviewReasonText = rubricCells.pop() ?? "";
+    const scoreCell = rubricCells[rubricCells.length - 1]?.trim() ?? "";
+    if (looksLikeCaseScoreMatrixCell(scoreCell)) {
+      qualityReviewScoreText = rubricCells.pop() ?? "";
+    } else {
+      qualityReviewReasonText = "";
+      rubricCells = [...cells];
+    }
+  }
+
+  const rubricsSource =
+    rubricCells
+      .slice()
+      .reverse()
+      .find(isLikelyRubricsCell) ??
+    rubricCells[rubricCells.length - 1] ??
+    "";
+
+  return {
+    rubricsSource,
+    qualityReviewScoreText,
+    qualityReviewReasonText,
+  };
+}
+
+function looksLikeCaseScoreMatrixCell(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (!/^[\[\]\s\r\n,01]+$/.test(text)) return false;
+  try {
+    return parseScoreMatrixInput(text).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeCaseReasonMatrixCell(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (parseFlatReasonEntries(text).length > 0) return true;
+  if (!(text.startsWith("[[") || text.includes("\t") || text.includes("||"))) return false;
+  try {
+    return parseReasonMatrixInput(text).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function isLikelyRubricsCell(value: string) {
+  const text = value.trim().toLowerCase();
+  if (!text) return false;
+  if (text.includes("rubrics")) return true;
+  if (/\d+\s*[.)、]/.test(text)) return true;
+  return ["页面", "功能", "支持", "提供", "使用", "展示", "验证", "点击"].some((keyword) => value.includes(keyword));
 }
 
 function normalizeCaseCell(value: string) {
@@ -1631,6 +2285,45 @@ function summarizeManualFailReasons(task: Task, results: ScoreResult[]) {
   return summaries;
 }
 
+function summarizeQualityReviewReviewerReasons(task: Task, results: QualityReviewResult[]) {
+  const summaries: string[] = [];
+  const resultByUrl = new Map(results.map((result) => [result.url, result]));
+
+  task.urls.forEach((url, urlIndex) => {
+    const result = resultByUrl.get(url);
+    if (!result) return;
+    const baselineScores = task.qualityReviewScoreMatrix[urlIndex] ?? [];
+    const baselineReasons = task.qualityReviewReasonMatrix[urlIndex] ?? [];
+
+    task.rubrics.forEach((_rubric, rubricIndex) => {
+      if (result.scores[rubricIndex] === baselineScores[rubricIndex]) return;
+      const reason = normalizeManualFailReason(result.reasons[rubricIndex]);
+      const baselineReason = normalizeManualFailReason(baselineReasons[rubricIndex]);
+      if (reason === baselineReason) return;
+      summaries.push(`第${urlIndex + 1}个页面->第${rubricIndex + 1}条rubrics->${reason}`);
+    });
+  });
+
+  return summaries;
+}
+
+function summarizeQualityReviewBaselineReasons(task: Task) {
+  const summaries: string[] = [];
+
+  task.urls.forEach((_, urlIndex) => {
+    const scores = task.qualityReviewScoreMatrix[urlIndex] ?? [];
+    const reasons = task.qualityReviewReasonMatrix[urlIndex] ?? [];
+
+    task.rubrics.forEach((_rubric, rubricIndex) => {
+      if (scores[rubricIndex] !== 0) return;
+      const reason = normalizeManualFailReason(reasons[rubricIndex]);
+      summaries.push(`第${urlIndex + 1}个页面->第${rubricIndex + 1}条rubrics->${reason}`);
+    });
+  });
+
+  return summaries;
+}
+
 function getPageFailReason(result: ScoreResult) {
   const technology = result.evidence?.technology;
   if (!technology || typeof technology !== "object") return "";
@@ -1644,15 +2337,27 @@ function normalizeManualFailReason(reason: string | undefined) {
   return value;
 }
 
+function taskCompletedPageCount(task: Task) {
+  return task.qualityReviewEnabled ? (task.qualityReviewResultCount ?? 0) : (task.resultCount ?? 0);
+}
+
 function taskProgress(task: Task) {
+  const completedPageCount = taskCompletedPageCount(task);
+  if (task.qualityReviewEnabled && task.mode === "manual") {
+    if (completedPageCount >= task.urls.length && task.urls.length > 0) return 100;
+    if (task.status === "error") return Math.min(99, Math.round((completedPageCount / Math.max(task.urls.length, 1)) * 100));
+    if (task.status === "generating-rubrics") return 10;
+    if (task.status === "queued") return 2;
+    return Math.min(99, 20 + Math.round((completedPageCount / Math.max(task.urls.length, 1)) * 75));
+  }
   if (task.status === "scored") return 100;
-  if (task.status === "error") return Math.min(99, Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 100));
+  if (task.status === "error") return Math.min(99, Math.round((completedPageCount / Math.max(task.urls.length, 1)) * 100));
   if (task.status === "generating-rubrics") return 10;
   if (task.status === "rubrics-ready") {
-    return task.mode === "manual" ? Math.min(99, 20 + Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 75)) : 20;
+    return task.mode === "manual" ? Math.min(99, 20 + Math.round((completedPageCount / Math.max(task.urls.length, 1)) * 75)) : 20;
   }
   if (task.status === "scoring") {
-    return Math.min(99, 15 + Math.round(((task.resultCount ?? 0) / Math.max(task.urls.length, 1)) * 80));
+    return Math.min(99, 15 + Math.round((completedPageCount / Math.max(task.urls.length, 1)) * 80));
   }
   if (task.status === "queued") return 2;
   return 0;
@@ -1781,3 +2486,4 @@ function urlPrefixBeforeHtml(url: string) {
     return url.replace(/\.html?(\?|#|$)/i, "");
   }
 }
+
