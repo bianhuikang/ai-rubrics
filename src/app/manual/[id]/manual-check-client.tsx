@@ -381,7 +381,9 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
       <aside className={`manual-check-bar ${showFailReason ? "with-fail-reason" : ""} ${allDoneFlash ? "all-done-flash" : ""}`}>
         <div className="manual-check-meta">
           <div className="manual-meta-title">
-            <strong>手工检查</strong>
+            <a className="manual-source-link" href={url} target="_blank" rel="noreferrer">
+              打开原页面
+            </a>
             {sourceZipUrl ? (
               <a className="manual-source-link" href={sourceZipUrl} download target="_blank" rel="noreferrer">
                 下载源码
