@@ -1443,21 +1443,23 @@ function ManualTaskResultSection({
         </ul>
       </section>
 
-      {failSummaries.length ? (
-        <section className="manual-reason-section">
-          <div className="copy-bar">
-            <button className="small-button copy-action-button" onClick={() => void copyText(failCopyText)}>
-              复制原因
-            </button>
-            <span>质检原因汇总</span>
-          </div>
+      <section className="manual-reason-section">
+        <div className="copy-bar">
+          <button className="small-button copy-action-button" onClick={() => void copyText(failCopyText)} disabled={!failSummaries.length}>
+            复制原因
+          </button>
+          <span>质检人理由汇总</span>
+        </div>
+        {failSummaries.length ? (
           <ol className="manual-reason-list">
             {failSummaries.map((item) => (
               <li key={item}>{item}</li>
             ))}
           </ol>
-        </section>
-      ) : null}
+        ) : (
+          <p className="muted">暂无质检人理由汇总，当前质检结果与作答人理由一致。</p>
+        )}
+      </section>
     </>
   );
 }
