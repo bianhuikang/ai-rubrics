@@ -6,13 +6,13 @@ export const runtime = "nodejs";
 
 const settingsSchema = z.object({
   apiFormat: z.enum(["openai-chat-completions", "anthropic-messages"]),
-  endpointUrl: z.string().trim().url(),
+  endpointUrl: z.string().trim(),
   apiKey: z.string(),
-  model: z.string().min(1),
+  model: z.string(),
   temperature: z.coerce.number().min(0).max(2),
   extraRequestParams: z.string().min(0).default("{}"),
-  rubricPrompt: z.string().min(1),
-  scoringPrompt: z.string().min(1),
+  rubricPrompt: z.string(),
+  scoringPrompt: z.string(),
 });
 
 function validateExtraParams(value: string) {
@@ -29,6 +29,12 @@ export async function POST(request: Request) {
   try {
     const settings = settingsSchema.parse(await request.json());
     settings.extraRequestParams = validateExtraParams(settings.extraRequestParams);
+    if (!settings.endpointUrl) {
+      return NextResponse.json({ ok: false, error: "请填写完整接口地址（Endpoint URL）" });
+    }
+    if (!settings.model.trim()) {
+      return NextResponse.json({ ok: false, error: "请填写模型名称（Model）" });
+    }
     const result = await testModelConnection(settings);
     return NextResponse.json(result);
   } catch (error) {

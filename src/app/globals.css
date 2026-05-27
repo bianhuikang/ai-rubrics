@@ -491,7 +491,20 @@ select:focus {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  min-width: 260px;
+  min-width: 360px;
+}
+
+.task-select-col {
+  width: 36px;
+  text-align: center;
+}
+
+.task-select-col input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.task-select-col input[type="checkbox"]:disabled {
+  cursor: not-allowed;
 }
 
 .task-search-input {

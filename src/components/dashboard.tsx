@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_RUBRIC_PROMPT, DEFAULT_SCORING_PROMPT } from "@/lib/default-prompts";
@@ -67,6 +67,7 @@ export function Dashboard() {
   const [testResult, setTestResult] = useState<Notice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(new Set());
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [rubricsReviewOpen, setRubricsReviewOpen] = useState(false);
   const [qualityLocatorOpen, setQualityLocatorOpen] = useState(false);
   const [qualityScoreText, setQualityScoreText] = useState("");
@@ -77,7 +78,12 @@ export function Dashboard() {
   const [urlsText, setUrlsText] = useState("");
   const [rubricsText, setRubricsText] = useState("");
   const rubricNormalizationInFlightRef = useRef<string | null>(null);
+  const settingsOpenRef = useRef(false);
   const manualMode = true;
+
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
 
   useEffect(() => {
     void refreshAll();
@@ -216,11 +222,31 @@ export function Dashboard() {
     return tasks.filter((task) => task.id.toLowerCase().includes(keyword));
   }, [taskSearch, tasks]);
 
-  async function refreshAll(options: { keepSelection?: boolean } = {}) {
-    const [settingsResponse, tasksResponse] = await Promise.all([fetch("/api/settings"), fetch("/api/tasks")]);
-    const nextSettings = (await settingsResponse.json()) as SettingsResponse;
+  function isTaskDeletable(task: Task) {
+    return !runningTaskIds.has(task.id) && !runningStatuses.includes(task.status);
+  }
+
+  const deletableFilteredTasks = useMemo(
+    () => filteredTasks.filter((task) => isTaskDeletable(task)),
+    [filteredTasks, runningTaskIds],
+  );
+
+  const selectedDeletableTasks = useMemo(
+    () => filteredTasks.filter((task) => selectedTaskIds.has(task.id) && isTaskDeletable(task)),
+    [filteredTasks, selectedTaskIds, runningTaskIds],
+  );
+
+  const allFilteredDeletableSelected =
+    deletableFilteredTasks.length > 0 && deletableFilteredTasks.every((task) => selectedTaskIds.has(task.id));
+
+  async function loadSettings() {
+    const settingsResponse = await fetch("/api/settings");
+    applySettingsResponse((await settingsResponse.json()) as SettingsResponse);
+  }
+
+  async function refreshTasks(options: { keepSelection?: boolean } = {}) {
+    const tasksResponse = await fetch("/api/tasks");
     const taskData = (await tasksResponse.json()) as { tasks: Task[] };
-    applySettingsResponse(nextSettings);
     setTasks(taskData.tasks);
     setActiveTask((current) => {
       if (options.keepSelection && current) {
@@ -228,6 +254,15 @@ export function Dashboard() {
       }
       return current ? taskData.tasks.find((task) => task.id === current.id) ?? current : taskData.tasks[0] ?? null;
     });
+  }
+
+  async function refreshAll(options: { keepSelection?: boolean; includeSettings?: boolean } = {}) {
+    const includeSettings = options.includeSettings ?? !settingsOpenRef.current;
+    if (includeSettings) {
+      await Promise.all([loadSettings(), refreshTasks(options)]);
+      return;
+    }
+    await refreshTasks(options);
   }
 
   function applySettingsResponse(data: SettingsResponse) {
@@ -388,29 +423,34 @@ export function Dashboard() {
   async function parseClipboardCase() {
     try {
       const text = await navigator.clipboard.readText();
-      const parsedRows = parseCaseRows(text);
-      if (!parsedRows.length) {
-        setNotice({ kind: "error", text: "没有识别到表格行，请复制包含任务ID、Prompt、URL数组、Rubrics的行。" });
+      const rowChunks = splitCaseRows(text);
+
+      if (rowChunks.length > 1) {
+        const parsedRows = parseCaseRows(text);
+        if (!parsedRows.length) {
+          applyPartialPastedCase(parseCaseRowPartial(rowChunks[0] ?? text));
+          return;
+        }
+        await createParsedCaseTasks(parsedRows);
         return;
       }
-      if (parsedRows.length === 1) {
-        applyPastedCase(parsedRows[0]);
-        return;
-      }
-      await createParsedCaseTasks(parsedRows);
+
+      applyPartialPastedCase(parseCaseRowPartial(rowChunks[0] ?? text));
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  function applyPastedCase(parsed: ParsedCaseRow) {
+  function applyPartialPastedCase(parsed: ParsedCaseRow) {
     setTaskId(parsed.id);
     setPrompt(parsed.prompt);
     setUrlsText(parsed.urlsText);
     setRubricsText(parsed.rubricsText);
     setQualityReviewScoreText(parsed.qualityReviewScoreText);
     setQualityReviewReasonText(parsed.qualityReviewReasonText);
-    setNotice({ kind: "success", text: "已解析到表单。" });
+    if (Object.values(parsed).some(Boolean)) {
+      setNotice({ kind: "success", text: "已解析到表单。" });
+    }
   }
 
   async function createParsedCaseTasks(parsedRows: ParsedCaseRow[]) {
@@ -550,27 +590,98 @@ export function Dashboard() {
   }
 
   async function deleteTaskById(task: Task) {
-    const isRunning = runningTaskIds.has(task.id) || runningStatuses.includes(task.status);
-    if (isRunning) return;
+    if (!isTaskDeletable(task)) return;
     if (!window.confirm(`确认删除任务 ${task.id} 吗？相关结果、日志和手工草稿都会一起删除。`)) return;
+    await deleteTasksByIds([task]);
+  }
 
-    const wasActive = activeTask?.id === task.id;
-    await run("delete-task", `任务 ${task.id} 已删除。`, async () => {
-      const response = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
-      if (!response.ok) throw new Error(await response.text());
-      setTasks((current) => current.filter((item) => item.id !== task.id));
-      setRunningTaskIds((current) => {
-        const next = new Set(current);
-        next.delete(task.id);
-        return next;
-      });
-      if (wasActive) {
-        setActiveTask(null);
-        setResults([]);
-        setTaskLogs([]);
-        setRubricsReviewOpen(false);
+  function toggleTaskSelection(task: Task) {
+    if (!isTaskDeletable(task)) return;
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(task.id)) next.delete(task.id);
+      else next.add(task.id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllFilteredTasks() {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (allFilteredDeletableSelected) {
+        for (const task of deletableFilteredTasks) next.delete(task.id);
+      } else {
+        for (const task of deletableFilteredTasks) next.add(task.id);
+      }
+      return next;
+    });
+  }
+
+  async function deleteSelectedTasks() {
+    const tasksToDelete = selectedDeletableTasks;
+    if (!tasksToDelete.length) return;
+    if (
+      !window.confirm(
+        `确认删除已选中的 ${tasksToDelete.length} 个任务吗？相关结果、日志和手工草稿都会一起删除。`,
+      )
+    ) {
+      return;
+    }
+    await deleteTasksByIds(tasksToDelete);
+  }
+
+  async function deleteTasksByIds(tasksToDelete: Task[]) {
+    if (!tasksToDelete.length) return;
+
+    const deletedIds = new Set<string>();
+    const failed: string[] = [];
+
+    await run("delete-tasks", `已删除 ${tasksToDelete.length} 个任务。`, async () => {
+      await Promise.all(
+        tasksToDelete.map(async (task) => {
+          const response = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
+          if (!response.ok) {
+            failed.push(task.id);
+            return;
+          }
+          deletedIds.add(task.id);
+        }),
+      );
+
+      if (!deletedIds.size) {
+        throw new Error(failed.length ? `删除失败：${failed.join("、")}` : "没有任务被删除。");
+      }
+
+      applyTasksDeleted(deletedIds);
+
+      if (failed.length) {
+        throw new Error(`部分任务删除失败：${failed.join("、")}`);
       }
     });
+  }
+
+  function applyTasksDeleted(deletedIds: Set<string>) {
+    const activeDeleted = activeTask ? deletedIds.has(activeTask.id) : false;
+
+    setTasks((current) => current.filter((item) => !deletedIds.has(item.id)));
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      for (const id of deletedIds) next.delete(id);
+      return next;
+    });
+    setRunningTaskIds((current) => {
+      const next = new Set(current);
+      for (const id of deletedIds) next.delete(id);
+      return next;
+    });
+
+    if (activeDeleted) {
+      setActiveTask(null);
+      setResults([]);
+      setQualityReviewResults([]);
+      setTaskLogs([]);
+      setRubricsReviewOpen(false);
+    }
   }
 
   async function rerunActiveTask() {
@@ -731,7 +842,7 @@ export function Dashboard() {
             Rubrics（可选）
             <textarea
               value={rubricsText}
-              onChange={(event) => setRubricsText(event.target.value)}
+              onChange={(event) => setRubricsText(clearRubricsTextIfHtmlOrReact(event.target.value))}
               rows={8}
               placeholder={"留空则自动生成；手填时一行一条规则。"}
             />
@@ -777,12 +888,28 @@ export function Dashboard() {
                 placeholder="搜索任务 ID"
               />
               <button onClick={() => void refreshAll({ keepSelection: true })}>刷新</button>
+              <button
+                className="danger-button"
+                disabled={Boolean(busy) || !selectedDeletableTasks.length}
+                onClick={() => void deleteSelectedTasks()}
+              >
+                删除选中{selectedDeletableTasks.length ? ` (${selectedDeletableTasks.length})` : ""}
+              </button>
             </div>
           </div>
           <div className="table-wrap">
             <table className="task-table">
               <thead>
                 <tr>
+                  <th className="task-select-col">
+                    <input
+                      type="checkbox"
+                      aria-label="全选当前列表可删除任务"
+                      checked={allFilteredDeletableSelected}
+                      disabled={!deletableFilteredTasks.length}
+                      onChange={toggleSelectAllFilteredTasks}
+                    />
+                  </th>
                   <th>任务 ID</th>
                   <th>状态</th>
                   <th>URL</th>
@@ -811,6 +938,15 @@ export function Dashboard() {
                           void loadResults(task.id);
                         }}
                       >
+                        <td className="task-select-col" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`选择任务 ${task.id}`}
+                            checked={selectedTaskIds.has(task.id)}
+                            disabled={!isTaskDeletable(task)}
+                            onChange={() => toggleTaskSelection(task)}
+                          />
+                        </td>
                         <td>
                           <div className="task-id-cell">
                             <span className="mono">{task.id}</span>
@@ -866,7 +1002,7 @@ export function Dashboard() {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={6} className="empty-cell">
+                    <td colSpan={7} className="empty-cell">
                       暂无任务
                     </td>
                   </tr>
@@ -1065,15 +1201,15 @@ export function Dashboard() {
               </label>
               <label>
                 完整接口地址
-                <input value={settings.endpointUrl} onChange={(event) => setSettings({ ...settings, endpointUrl: event.target.value })} />
+                <input placeholder="例如: https://api.openai.com/v1/chat/completions" value={settings.endpointUrl} onChange={(event) => setSettings({ ...settings, endpointUrl: event.target.value })} />
               </label>
               <label>
                 API Key
-                <input type="password" value={settings.apiKey} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} />
+                <input type="password" placeholder="例如: sk-... 或 ollama（本地模型可随意填）" value={settings.apiKey} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} />
               </label>
               <label>
                 Model
-                <input value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} />
+                <input placeholder="例如: gpt-4o / qwen-plus / deepseek-r1 / llama3" value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} />
               </label>
               <label>
                 Temperature
@@ -1215,10 +1351,10 @@ function ResultView({
   }
 
   async function deleteRubric(index: number) {
-    if (task.rubrics.length <= 1) {
-      setRubricError("至少保留 1 条 Rubric。");
-      return;
-    }
+    // if (task.rubrics.length <= 1) {
+    //   setRubricError("至少保留 1 条 Rubric。");
+    //   return;
+    // }
     if (!window.confirm(`确认删除第 ${index + 1} 条 Rubric？对应打分和汇总也会同步删除。`)) return;
     try {
       setRubricBusy(index);
@@ -2048,8 +2184,28 @@ function validateUrls(values: string[]) {
   return urls;
 }
 
+function looksLikeHtmlOrReactLine(line: string): boolean {
+  const text = line.trim();
+  if (!text) return false;
+  if (/^<!DOCTYPE\s+html/i.test(text)) return true;
+  if (/^<\/?[A-Za-z][\w:-]*[\s/>]/.test(text)) return true;
+  if (/\bclassName\s*=/.test(text)) return true;
+  if (/^import\s+.*\s+from\s+['"]react['"]/i.test(text)) return true;
+  if (/^import\s+React\b/.test(text)) return true;
+  if (/^export\s+default\s+function\b/.test(text)) return true;
+  if (/^export\s+function\s+\w+/.test(text)) return true;
+  if (/^(?:const|let|var)\s+\w+\s*=\s*\([^)]*\)\s*=>/.test(text)) return true;
+  return false;
+}
+
+function clearRubricsTextIfHtmlOrReact(value: string): string {
+  const firstLine = value.split(/\r?\n/)[0] ?? "";
+  if (looksLikeHtmlOrReactLine(firstLine)) return "";
+  return value;
+}
+
 function parseRubricsInput(value: string): Rubric[] {
-  const text = value.trim();
+  const text = clearRubricsTextIfHtmlOrReact(value).trim();
   if (!text) return [];
 
   const lines = text
@@ -2109,75 +2265,80 @@ function splitCaseRows(value: string) {
     .filter(Boolean);
 }
 
-function parseCaseRow(value: string): ParsedCaseRow | null {
-  const text = value.trim();
-  if (!text) return null;
-
-  const cells = text
-    .split("\t")
-    .map(normalizeCaseCell)
-    .filter(Boolean);
-  const urlCellIndex = cells.findIndex((cell) => /^["']?\s*\[/.test(cell) && /https?:\/\//i.test(cell));
-  if (cells.length < 3 || urlCellIndex < 1) return null;
-
-  const id = cells[0];
-  const prompt = cells.slice(1, urlCellIndex).join("\n\n").trim();
-  const urlsText = cells[urlCellIndex];
-  const rubricsSource = cells
-    .slice(urlCellIndex + 1)
-    .reverse()
-    .find((cell) => /\d+\s*[.、]|rubrics|页面|功能|支持|提供|使用|展示|验证|点击/i.test(cell));
-
-  if (!id || !prompt || !urlsText || !rubricsSource) return null;
-
-  try {
-    parseUrls(urlsText);
-  } catch {
-    return null;
-  }
-
-  return {
-    id,
-    prompt,
-    urlsText,
-    rubricsText: normalizeCaseRubricsText(rubricsSource),
+function parseCaseRowPartial(value: string): ParsedCaseRow {
+  const empty: ParsedCaseRow = {
+    id: "",
+    prompt: "",
+    urlsText: "",
+    rubricsText: "",
     qualityReviewScoreText: "",
     qualityReviewReasonText: "",
   };
-}
 
-function parseCaseRowWithQuality(value: string): ParsedCaseRow | null {
   const text = value.trim();
-  if (!text) return null;
+  if (!text) return empty;
 
   const cells = text
     .split("\t")
     .map(normalizeCaseCell)
     .filter(Boolean);
+  if (!cells.length) return empty;
+
   const urlCellIndex = cells.findIndex((cell) => /^["']?\s*\[/.test(cell) && /https?:\/\//i.test(cell));
-  if (cells.length < 3 || urlCellIndex < 1) return null;
+  if (urlCellIndex >= 1) {
+    const id = looksLikeTaskIdCell(cells[0]) && urlCellIndex > 0 ? cells[0] : "";
+    const promptStart = id ? 1 : 0;
+    const prompt = cells.slice(promptStart, urlCellIndex).join("\n\n").trim();
 
-  const id = cells[0];
-  const prompt = cells.slice(1, urlCellIndex).join("\n\n").trim();
-  const urlsText = cells[urlCellIndex];
-  const { rubricsSource, qualityReviewScoreText, qualityReviewReasonText } = extractCaseReviewFields(cells.slice(urlCellIndex + 1));
+    let urlsText = "";
+    try {
+      parseUrls(cells[urlCellIndex]);
+      urlsText = cells[urlCellIndex];
+    } catch {
+      urlsText = "";
+    }
 
-  if (!id || !prompt || !urlsText || !rubricsSource) return null;
+    const { rubricsSource, qualityReviewScoreText, qualityReviewReasonText } = extractCaseReviewFields(cells.slice(urlCellIndex + 1));
+    const rubricsText =
+      rubricsSource && isLikelyRubricsCell(rubricsSource) ? normalizeCaseRubricsText(rubricsSource) : "";
 
+    return {
+      id,
+      prompt,
+      urlsText,
+      rubricsText,
+      qualityReviewScoreText,
+      qualityReviewReasonText,
+    };
+  }
+
+  if (cells.length === 1) {
+    if (looksLikeTaskIdCell(cells[0])) return { ...empty, id: cells[0] };
+    return { ...empty, prompt: text };
+  }
+
+  const id = looksLikeTaskIdCell(cells[0]) ? cells[0] : "";
+  const prompt = id ? cells.slice(1).join("\n\n").trim() : text;
+  return { ...empty, id, prompt };
+}
+
+function looksLikeTaskIdCell(value: string) {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value.trim());
+}
+
+function parseCaseRow(value: string): ParsedCaseRow | null {
+  const partial = parseCaseRowPartial(value);
+  if (!partial.id || !partial.prompt || !partial.urlsText) return null;
   try {
-    parseUrls(urlsText);
+    parseUrls(partial.urlsText);
   } catch {
     return null;
   }
+  return partial;
+}
 
-  return {
-    id,
-    prompt,
-    urlsText,
-    rubricsText: normalizeCaseRubricsText(rubricsSource),
-    qualityReviewScoreText,
-    qualityReviewReasonText,
-  };
+function parseCaseRowWithQuality(value: string): ParsedCaseRow | null {
+  return parseCaseRow(value);
 }
 
 function extractCaseReviewFields(cells: string[]) {
@@ -2252,7 +2413,10 @@ function normalizeCaseCell(value: string) {
 }
 
 function normalizeCaseRubricsText(value: string) {
-  const lines = value
+  const cleared = clearRubricsTextIfHtmlOrReact(value);
+  if (!cleared.trim()) return "";
+
+  const lines = cleared
     .replace(/\r\n/g, "\n")
     .split("\n")
     .map((line) => line.trim())
@@ -2260,7 +2424,7 @@ function normalizeCaseRubricsText(value: string) {
 
   if (lines.length > 1) return lines.map(stripRubricListMarker).filter(Boolean).join("\n");
 
-  const matched = value.match(/\d+\s*[.、][\s\S]*?(?=\s+\d+\s*[.、]|$)/g);
+  const matched = cleared.match(/\d+\s*[.、][\s\S]*?(?=\s+\d+\s*[.、]|$)/g);
   return (matched?.length ? matched : lines).map(stripRubricListMarker).filter(Boolean).join("\n");
 }
 

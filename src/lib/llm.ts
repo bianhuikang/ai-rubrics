@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { llmFetch } from "./llm-fetch";
 import type { EvidencePlanStep, PageEvidence, Rubric, Settings } from "./types";
 import { trimForPrompt } from "./requirement-parser";
 
@@ -6,6 +7,16 @@ type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
+
+function normalizeEndpointUrl(endpoint: string, apiFormat: Settings["apiFormat"]): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return trimmed;
+  const needsOpenAiPath = apiFormat === "openai-chat-completions" && !trimmed.endsWith("/chat/completions");
+  const needsAnthropicPath = apiFormat === "anthropic-messages" && !trimmed.endsWith("/messages");
+  if (needsOpenAiPath) return trimmed.replace(/\/+$/, "") + "/chat/completions";
+  if (needsAnthropicPath) return trimmed.replace(/\/+$/, "") + "/messages";
+  return trimmed;
+}
 
 const rubricSchema = z.object({
   rubrics: z
@@ -358,9 +369,10 @@ export async function scorePage(input: {
 }
 
 export async function testModelConnection(settings: Settings) {
-  const endpoint = settings.endpointUrl.trim();
-  if (!endpoint) throw new Error("Endpoint URL is required in settings.");
+  const rawEndpoint = settings.endpointUrl.trim();
+  if (!rawEndpoint) throw new Error("Endpoint URL is required in settings.");
   if (!settings.model.trim()) throw new Error("Model is required in settings.");
+  const endpoint = normalizeEndpointUrl(rawEndpoint, settings.apiFormat);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
@@ -400,7 +412,7 @@ export async function testModelConnection(settings: Settings) {
   logLlmRequest(`${settings.apiFormat}:test`, endpoint, body);
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await llmFetch(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -441,7 +453,7 @@ async function callJsonModel(settings: Settings, messages: ChatMessage[]) {
 }
 
 async function callOpenAICompatible(settings: Settings, messages: ChatMessage[]) {
-  const endpoint = settings.endpointUrl.trim();
+  const endpoint = normalizeEndpointUrl(settings.endpointUrl.trim(), settings.apiFormat);
   const requestBody = {
     model: settings.model,
     messages,
@@ -450,7 +462,7 @@ async function callOpenAICompatible(settings: Settings, messages: ChatMessage[])
   };
   const startedAt = Date.now();
   logLlmRequest("openai-chat-completions", endpoint, requestBody);
-  const response = await fetch(endpoint, {
+  const response = await llmFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -474,7 +486,7 @@ async function callOpenAICompatible(settings: Settings, messages: ChatMessage[])
 }
 
 async function callClaude(settings: Settings, messages: ChatMessage[]) {
-  const endpoint = settings.endpointUrl.trim();
+  const endpoint = normalizeEndpointUrl(settings.endpointUrl.trim(), settings.apiFormat);
   const system = messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -496,7 +508,7 @@ async function callClaude(settings: Settings, messages: ChatMessage[]) {
   const startedAt = Date.now();
   logLlmRequest("anthropic-messages", endpoint, requestBody);
 
-  const response = await fetch(endpoint, {
+  const response = await llmFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
