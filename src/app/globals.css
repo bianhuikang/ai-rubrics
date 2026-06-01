@@ -1096,10 +1096,46 @@ summary {
 
 .editable-rubric-list li {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 24px 28px minmax(0, 1fr) auto;
   gap: 8px;
   align-items: start;
   margin: 0;
+}
+
+.editable-rubric-list li.rubric-row-dragging {
+  opacity: 0.55;
+}
+
+.editable-rubric-list li.rubric-row-drag-over {
+  border-radius: 8px;
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+.rubric-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 0;
+  width: 24px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+
+.rubric-drag-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.rubric-drag-handle:not(:disabled):active {
+  cursor: grabbing;
 }
 
 .rubric-index-label {

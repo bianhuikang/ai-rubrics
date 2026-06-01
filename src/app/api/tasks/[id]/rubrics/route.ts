@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { clearQualityReviewForTask, getSettings, getTask, listResults, migrateManualDraftsAfterRubricRemoval, updateResultScoresAndReasons, updateTask } from "@/lib/db";
+import {
+  clearQualityReviewForTask,
+  getSettings,
+  getTask,
+  listResults,
+  migrateManualDraftsAfterRubricRemoval,
+  migrateScoresAfterRubricReorder,
+  updateResultScoresAndReasons,
+  updateTask,
+} from "@/lib/db";
 import { generateRubrics } from "@/lib/llm";
 import { logRubrics, logTaskStep } from "@/lib/server-log";
 
@@ -17,9 +26,22 @@ const rubricSchema = z.object({
 const updateRubricsSchema = z.object({
   rubrics: z.array(rubricSchema).min(1),
   removedIndexes: z.array(z.number().int().min(0)).default([]),
+  permutation: z.array(z.number().int().min(0)).optional(),
   preserveRubricsModified: z.boolean().default(false),
   preserveQualityReview: z.boolean().default(false),
 });
+
+function sameRubricsMultiset(
+  left: Array<{ name: string; description: string; evidenceHints: string[] }>,
+  right: Array<{ name: string; description: string; evidenceHints: string[] }>,
+) {
+  if (left.length !== right.length) return false;
+  const signature = (rubric: { name: string; description: string; evidenceHints: string[] }) =>
+    `${rubric.name}\0${rubric.description}\0${rubric.evidenceHints.join("\u0001")}`;
+  const leftSignatures = left.map(signature).sort();
+  const rightSignatures = right.map(signature).sort();
+  return leftSignatures.every((value, index) => value === rightSignatures[index]);
+}
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -70,7 +92,18 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       migrateManualDraftsAfterRubricRemoval(id, removedIndexes, normalizedRubrics.length);
     }
 
-    if (rubricsChanged && task.qualityReviewEnabled && !input.preserveQualityReview) {
+    const permutation = input.permutation;
+    const isReorderOnly =
+      !removedIndexes.length &&
+      permutation?.length === normalizedRubrics.length &&
+      normalizedRubrics.length === task.rubrics.length &&
+      sameRubricsMultiset(normalizedRubrics, task.rubrics);
+
+    if (permutation?.length === normalizedRubrics.length && permutation.length === task.rubrics.length) {
+      migrateScoresAfterRubricReorder(id, permutation);
+    }
+
+    if (rubricsChanged && task.qualityReviewEnabled && !input.preserveQualityReview && !isReorderOnly) {
       clearQualityReviewForTask(id);
     }
 

@@ -755,6 +755,63 @@ export function migrateManualDraftsAfterRubricRemoval(taskId: string, removedInd
   }
 }
 
+function applyRubricPermutation<T>(values: T[], permutation: number[]): T[] {
+  if (values.length !== permutation.length) return values;
+  return permutation.map((oldIndex) => values[oldIndex]);
+}
+
+export function migrateScoresAfterRubricReorder(taskId: string, permutation: number[]) {
+  if (!permutation.length) return;
+  const task = getTask(taskId);
+  if (!task) throw new Error("Task not found");
+
+  for (const result of listResults(taskId)) {
+    updateResultScoresAndReasons(
+      result.id,
+      applyRubricPermutation(result.scores, permutation),
+      applyRubricPermutation(result.reasons, permutation),
+    );
+  }
+
+  for (const draft of listManualDrafts(taskId)) {
+    const nextReasons = applyRubricPermutation(draft.reasons, permutation);
+    saveManualDraft({
+      taskId,
+      url: draft.url,
+      scores: applyRubricPermutation(draft.scores, permutation),
+      reasons: nextReasons,
+      answeredCount: firstUnansweredIndex(nextReasons, permutation.length),
+    });
+  }
+
+  for (const draft of listQualityReviewDrafts(taskId)) {
+    const nextReasons = applyRubricPermutation(draft.reasons, permutation);
+    saveQualityReviewDraft({
+      taskId,
+      url: draft.url,
+      scores: applyRubricPermutation(draft.scores, permutation),
+      reasons: nextReasons,
+      answeredCount: firstUnansweredIndex(nextReasons, permutation.length),
+    });
+  }
+
+  for (const result of listQualityReviewResults(taskId)) {
+    saveQualityReviewResult({
+      taskId,
+      url: result.url,
+      scores: applyRubricPermutation(result.scores, permutation),
+      reasons: applyRubricPermutation(result.reasons, permutation),
+    });
+  }
+
+  if (task.qualityReviewEnabled && task.qualityReviewScoreMatrix.length) {
+    updateTask(taskId, {
+      qualityReviewScoreMatrix: task.qualityReviewScoreMatrix.map((row) => applyRubricPermutation(row, permutation)),
+      qualityReviewReasonMatrix: task.qualityReviewReasonMatrix.map((row) => applyRubricPermutation(row, permutation)),
+    });
+  }
+}
+
 export function updateResultScoresAndReasons(resultId: string, scores: number[], reasons: string[]) {
   getDb()
     .prepare(

@@ -172,14 +172,14 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
   const nextUrl = task ? findNextUrl(task.urls, url) : null;
   const sourceZipUrl = getSourceZipUrl(url);
 
-  async function saveManualScore(nextScores: number[], nextReasons: string[], nextPageFailReason?: string) {
+  async function saveManualScore(nextScores: number[], nextReasons: string[]) {
     setSaving(true);
     setNotice("保存中...");
     try {
       const response = await fetch(`/api/tasks/${taskId}/manual-score`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, scores: nextScores, reasons: nextReasons, pageFailReason: nextPageFailReason }),
+        body: JSON.stringify({ url, scores: nextScores, reasons: nextReasons }),
       });
       if (!response.ok) throw new Error(await response.text());
 
@@ -288,7 +288,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setLastChoice(0);
     setPendingFailIndex(null);
     setPendingPageFail(true);
-    setPageFailReason("");
+    setPageFailReason(reasons.find((reason) => reason.trim()) || "");
     setNotice("请输入页面全不符合理由");
   }
 
@@ -308,7 +308,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
     setPendingFailIndex(null);
     setPendingPageFail(false);
     setPageFailReason("");
-    void saveManualScore(nextScores, nextReasons, reason);
+    void saveManualScore(nextScores, nextReasons);
   }
 
   function cancelFailReason() {
@@ -450,7 +450,7 @@ export function ManualCheckClient({ taskId, url }: ManualCheckClientProps) {
                     onKeyDown={(event) => {
                       if (event.key === "Enter") submitPageFailReason();
                     }}
-                    placeholder="页面全部不符合理由"
+                    placeholder={`页面全部不符合理由（将生成 ${task.rubrics.length} 条）`}
                   />
                   <button className="manual-rubric-toggle fail-choice" onClick={submitPageFailReason} disabled={saving} type="button">
                     确认

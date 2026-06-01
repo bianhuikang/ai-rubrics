@@ -1280,6 +1280,9 @@ function ResultView({
 }) {
   const [rubricDrafts, setRubricDrafts] = useState<string[]>(() => task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
   const [rubricBusy, setRubricBusy] = useState<number | null>(null);
+  const [rubricListBusy, setRubricListBusy] = useState(false);
+  const [rubricDragIndex, setRubricDragIndex] = useState<number | null>(null);
+  const [rubricDragOverIndex, setRubricDragOverIndex] = useState<number | null>(null);
   const [rubricError, setRubricError] = useState("");
   const [rubricDirty, setRubricDirty] = useState(false);
 
@@ -1313,17 +1316,25 @@ function ResultView({
     return new Map(qualityTargets.map((target) => [target.url, target]));
   }, [qualityTargets]);
 
-  async function persistRubrics(nextDescriptions: string[], removedIndexes: number[] = []) {
+  async function persistRubrics(
+    nextDescriptions: string[],
+    options: { removedIndexes?: number[]; permutation?: number[]; sourceRubrics?: Rubric[] } = {},
+  ) {
+    const sourceRubrics = options.sourceRubrics ?? task.rubrics;
     const rubrics = nextDescriptions.map((description, index) => ({
       id: `R${index + 1}`,
-      name: task.rubrics[index]?.name || `规则 ${index + 1}`,
+      name: sourceRubrics[index]?.name || `规则 ${index + 1}`,
       description: stripRubricNumberPrefix(description),
-      evidenceHints: task.rubrics[index]?.evidenceHints || [],
+      evidenceHints: sourceRubrics[index]?.evidenceHints || [],
     }));
     const response = await fetch(`/api/tasks/${task.id}/rubrics`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rubrics, removedIndexes }),
+      body: JSON.stringify({
+        rubrics,
+        removedIndexes: options.removedIndexes ?? [],
+        permutation: options.permutation,
+      }),
     });
     const data = (await response.json()) as { task?: Task; results?: ScoreResult[]; error?: string };
     if (!response.ok || !data.task || !data.results) throw new Error(data.error || "Rubrics 保存失败");
@@ -1361,12 +1372,45 @@ function ResultView({
       setRubricError("");
       await persistRubrics(
         rubricDrafts.filter((_item, itemIndex) => itemIndex !== index),
-        [index],
+        { removedIndexes: [index] },
       );
     } catch (error) {
       setRubricError(error instanceof Error ? error.message : String(error));
     } finally {
       setRubricBusy(null);
+    }
+  }
+
+  async function addRubric() {
+    try {
+      setRubricListBusy(true);
+      setRubricError("");
+      await persistRubrics([...rubricDrafts, "新规则"]);
+    } catch (error) {
+      setRubricError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRubricListBusy(false);
+    }
+  }
+
+  async function reorderRubrics(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex) return;
+    const reorderedDrafts = reorderList(rubricDrafts, fromIndex, toIndex);
+    const reorderedRubrics = reorderList(task.rubrics, fromIndex, toIndex);
+    const permutation = buildRubricPermutation(fromIndex, toIndex, task.rubrics.length);
+    try {
+      setRubricListBusy(true);
+      setRubricError("");
+      setRubricDrafts(reorderedDrafts);
+      setRubricDirty(false);
+      await persistRubrics(reorderedDrafts, { permutation, sourceRubrics: reorderedRubrics });
+    } catch (error) {
+      setRubricDrafts(task.rubrics.map((rubric) => stripRubricNumberPrefix(rubric.description)));
+      setRubricError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRubricListBusy(false);
+      setRubricDragIndex(null);
+      setRubricDragOverIndex(null);
     }
   }
 
@@ -1378,13 +1422,52 @@ function ResultView({
             <button className="small-button" onClick={() => void copyText(rubricsCopyText)}>
               复制 Rubrics
             </button>
+            <button className="small-button" onClick={() => void addRubric()} disabled={rubricBusy !== null || rubricListBusy}>
+              新增 Rubrics
+            </button>
             <strong>修改后立即应用，请刷新检查页面</strong>
           </div>
           <span>Rubrics ({task.rubrics.length})</span>
         </div>
         <ol className="rubric-list editable-rubric-list">
           {task.rubrics.map((rubric, index) => (
-            <li key={rubric.id}>
+            <li
+              key={`${rubric.id}-${index}`}
+              className={[
+                rubricDragIndex === index ? "rubric-row-dragging" : "",
+                rubricDragOverIndex === index && rubricDragIndex !== index ? "rubric-row-drag-over" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (rubricDragIndex === null || rubricDragIndex === index) return;
+                setRubricDragOverIndex(index);
+              }}
+              onDragLeave={() => {
+                if (rubricDragOverIndex === index) setRubricDragOverIndex(null);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (rubricDragIndex === null) return;
+                void reorderRubrics(rubricDragIndex, index);
+              }}
+            >
+              <button
+                type="button"
+                className="rubric-drag-handle"
+                draggable={!rubricListBusy && rubricBusy === null}
+                aria-label={`拖动调整第 ${index + 1} 条 Rubric 顺序`}
+                title="拖动调整顺序"
+                disabled={rubricListBusy || rubricBusy !== null}
+                onDragStart={() => setRubricDragIndex(index)}
+                onDragEnd={() => {
+                  setRubricDragIndex(null);
+                  setRubricDragOverIndex(null);
+                }}
+              >
+                ⋮⋮
+              </button>
               <span className="rubric-index-label">{index + 1}.</span>
               <input
                 value={rubricDrafts[index] ?? stripRubricNumberPrefix(rubric.description)}
@@ -1396,10 +1479,10 @@ function ResultView({
                 }
               />
               <div className="rubric-edit-actions">
-                <button className="small-button" onClick={() => void saveRubric(index)} disabled={rubricBusy !== null}>
+                <button className="small-button" onClick={() => void saveRubric(index)} disabled={rubricBusy !== null || rubricListBusy}>
                   保存
                 </button>
-                <button className="small-button danger-button" onClick={() => void deleteRubric(index)} disabled={rubricBusy !== null}>
+                <button className="small-button danger-button" onClick={() => void deleteRubric(index)} disabled={rubricBusy !== null || rubricListBusy}>
                   删除
                 </button>
               </div>
@@ -2234,6 +2317,20 @@ function normalizeRubricsIfNeeded(rubrics: Rubric[]) {
     return { ...rubric, description };
   });
   return changed ? normalized : null;
+}
+
+function reorderList<T>(list: T[], fromIndex: number, toIndex: number): T[] {
+  const next = [...list];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+function buildRubricPermutation(fromIndex: number, toIndex: number, length: number): number[] {
+  const order = Array.from({ length }, (_, index) => index);
+  const [moved] = order.splice(fromIndex, 1);
+  order.splice(toIndex, 0, moved);
+  return order;
 }
 
 function stripRubricNumberPrefix(value: string) {
